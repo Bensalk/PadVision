@@ -1,6 +1,9 @@
 package com.bensal.tvlauncher
 
 import android.app.Activity
+import android.view.View
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import android.app.PictureInPictureParams
 import android.util.Rational
 import org.json.JSONObject
@@ -76,6 +79,32 @@ import java.util.Locale
 
 data class Channel(val name: String, val url: String, val group: String, val logo: String?)
 data class AppItem(val label: String, val pkg: String, val icon: ImageBitmap, val intent: Intent, val isGame: Boolean)
+data class Lib(val section: String, val name: String, val url: String)
+const val IPTV = "https://iptv-org.github.io/iptv/"
+val library = listOf(
+    Lib("Popular", "All channels (very large, slow to load)", IPTV + "index.m3u"),
+    Lib("Popular", "India", IPTV + "countries/in.m3u"),
+    Lib("Popular", "Malayalam", IPTV + "languages/mal.m3u"),
+    Lib("Popular", "English", IPTV + "languages/eng.m3u"),
+    Lib("Categories", "News", IPTV + "categories/news.m3u"),
+    Lib("Categories", "Music", IPTV + "categories/music.m3u"),
+    Lib("Categories", "Sports", IPTV + "categories/sports.m3u"),
+    Lib("Categories", "Movies", IPTV + "categories/movies.m3u"),
+    Lib("Categories", "Kids", IPTV + "categories/kids.m3u"),
+    Lib("Categories", "Documentary", IPTV + "categories/documentary.m3u"),
+    Lib("Categories", "Entertainment", IPTV + "categories/entertainment.m3u"),
+    Lib("Categories", "Comedy", IPTV + "categories/comedy.m3u"),
+    Lib("Languages", "Hindi", IPTV + "languages/hin.m3u"),
+    Lib("Languages", "Tamil", IPTV + "languages/tam.m3u"),
+    Lib("Languages", "Telugu", IPTV + "languages/tel.m3u"),
+    Lib("Languages", "Kannada", IPTV + "languages/kan.m3u"),
+    Lib("Languages", "Arabic", IPTV + "languages/ara.m3u"),
+    Lib("Countries", "United Arab Emirates", IPTV + "countries/ae.m3u"),
+    Lib("Countries", "Qatar", IPTV + "countries/qa.m3u"),
+    Lib("Countries", "Saudi Arabia", IPTV + "countries/sa.m3u"),
+    Lib("Countries", "United Kingdom", IPTV + "countries/uk.m3u"),
+    Lib("Countries", "United States", IPTV + "countries/us.m3u")
+)
 data class PTheme(val name: String, val bg: Long, val surface: Long, val accent: Long, val glow: Long)
 
 val themes = listOf(
@@ -292,7 +321,7 @@ fun Sidebar(tab: Int, expanded: Boolean, onToggle: () -> Unit, onTab: (Int) -> U
 }
 
 @Composable
-fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, pls: List<String>, onAdd: () -> Unit, onRemove: (String) -> Unit, onRefresh: () -> Unit, onChange: () -> Unit) {
+fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, pls: List<String>, onAdd: () -> Unit, onRemove: (String) -> Unit, onRefresh: () -> Unit, onChange: () -> Unit, onAddUrl: (String) -> Unit) {
     val ctx = LocalContext.current
     var city by remember { mutableStateOf(store.city) }
     var auto by remember { mutableStateOf(store.auto) }
@@ -333,6 +362,17 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, pls: List<String>, o
             }
         }
         item { Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(onClick = onAdd) { Text("Add M3U link") }; OutlinedButton(onClick = onRefresh) { Text("Refresh") } } }
+        item { Text("Playlist library", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
+        library.groupBy { it.section }.forEach { (sec, l) ->
+            item { Text(sec, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold) }
+            items(l) { e ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(e.name, Modifier.weight(1f))
+                    if (e.url in pls) Text("✓ Added", color = Color.LightGray)
+                    else Button(onClick = { onAddUrl(e.url) }) { Text("Add") }
+                }
+            }
+        }
         item { Text("Personalize", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -369,7 +409,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 0.3", color = Color.LightGray)
+        Text("Version 0.5", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -476,7 +516,7 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
                         }
                     }
                     4 -> Settings(store, ti, onTheme, pls, { showAdd = true },
-                        { u -> pls = pls - u; store.playlists = pls; reload() }, { reload() }, onChange)
+                        { u -> pls = pls - u; store.playlists = pls; reload() }, { reload() }, onChange, { u -> pls = pls + u; store.playlists = pls; reload() })
                     else -> About()
                 }
             }
@@ -507,11 +547,19 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
 @Composable
 fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay: (Channel) -> Unit) {
     val ctx = LocalContext.current
+    val sp = remember { ctx.getSharedPreferences("tv", Context.MODE_PRIVATE) }
     var cur by remember { mutableStateOf(start) }
-    var mi by remember { mutableStateOf(0) }
+    var mi by remember { mutableStateOf(sp.getInt("aspect", 0).coerceIn(0, 5)) }
     var panel by remember { mutableStateOf(false) }
+    var ui by remember { mutableStateOf(true) }
+    var info by remember { mutableStateOf("") }
+    var showInfo by remember { mutableStateOf(false) }
+    var toast by remember { mutableStateOf("") }
     var sleepMin by remember { mutableStateOf(0) }
-    val modes = listOf(AspectRatioFrameLayout.RESIZE_MODE_FIT, AspectRatioFrameLayout.RESIZE_MODE_FILL, AspectRatioFrameLayout.RESIZE_MODE_ZOOM)
+    var leftSide by remember { mutableStateOf(true) }
+    var acc by remember { mutableStateOf(0f) }
+    val names = listOf("Fit", "Stretch", "Zoom", "16:9", "4:3", "21:9")
+    val am = remember { ctx.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager }
     val exo = remember {
         ExoPlayer.Builder(ctx, DefaultRenderersFactory(ctx).setEnableDecoderFallback(true)).build().also { p ->
             p.addListener(object : Player.Listener {
@@ -537,29 +585,98 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
         exo.setMediaItem(MediaItem.fromUri(cur.url)); exo.prepare(); exo.playWhenReady = true; onPlay(cur)
     }
     LaunchedEffect(sleepMin) { if (sleepMin > 0) { delay(sleepMin * 60_000L); onBack() } }
+    LaunchedEffect(toast) { if (toast.isNotEmpty()) { delay(1500); toast = "" } }
+    LaunchedEffect(showInfo) {
+        while (showInfo) {
+            val v = exo.videoSize
+            info = "${v.width}x${v.height}  •  ${((exo.videoFormat?.bitrate ?: 0).coerceAtLeast(0)) / 1000} kbps"
+            delay(1000)
+        }
+        info = ""
+    }
+    fun setAspect(i: Int) { mi = i; sp.edit().putInt("aspect", i).apply(); toast = "Aspect: ${names[i]}" }
     fun step(d: Int) {
         val i = list.indexOfFirst { it.url == cur.url }
         if (i >= 0 && list.isNotEmpty()) cur = list[(i + d + list.size) % list.size]
     }
     BackHandler { if (panel) panel = false else onBack() }
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(
-            factory = { PlayerView(it).apply { player = exo; setShowSubtitleButton(true); controllerShowTimeoutMs = 3000 } },
-            update = { it.resizeMode = modes[mi] },
-            modifier = Modifier.fillMaxSize()
-        )
-        Text(cur.name, Modifier.align(Alignment.TopStart).padding(16.dp), fontWeight = FontWeight.Bold, color = Color.White)
-        Row(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
-            TextButton(onClick = { panel = !panel }) { Text("☰ Channels") }
-            TextButton(onClick = { step(-1) }) { Text("◀") }
-            TextButton(onClick = { step(1) }) { Text("▶") }
-            TextButton(onClick = { mi = (mi + 1) % modes.size }) { Text("Aspect") }
-            TextButton(onClick = { sleepMin = listOf(0, 15, 30, 60)[(listOf(0, 15, 30, 60).indexOf(sleepMin) + 1) % 4] }) {
-                Text(if (sleepMin == 0) "Sleep" else "Sleep ${sleepMin}m")
-            }
-            TextButton(onClick = { runCatching { (ctx as Activity).enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) } }) { Text("PiP") }
-            TextButton(onClick = onBack) { Text("✕") }
+    Box(
+        Modifier.fillMaxSize().background(Color.Black).pointerInput(Unit) {
+            detectVerticalDragGestures(
+                onDragStart = { o -> leftSide = o.x < size.width / 2; acc = 0f },
+                onVerticalDrag = { _, dy ->
+                    if (leftSide) {
+                        val w = (ctx as Activity).window
+                        val b0 = if (w.attributes.screenBrightness < 0) 0.5f else w.attributes.screenBrightness
+                        val nb = (b0 - dy / 900f).coerceIn(0.02f, 1f)
+                        w.attributes = w.attributes.also { it.screenBrightness = nb }
+                        toast = "Brightness ${(nb * 100).toInt()}%"
+                    } else {
+                        acc += -dy / 50f
+                        val st = acc.toInt()
+                        if (st != 0) {
+                            acc -= st
+                            val mx = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                            val v = (am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) + st).coerceIn(0, mx)
+                            am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, v, 0)
+                            toast = "Volume $v/$mx"
+                        }
+                    }
+                }
+            )
         }
+    ) {
+        Box(
+            Modifier.align(Alignment.Center).then(
+                when (mi) {
+                    3 -> Modifier.aspectRatio(16f / 9f)
+                    4 -> Modifier.aspectRatio(4f / 3f)
+                    5 -> Modifier.aspectRatio(21f / 9f)
+                    else -> Modifier.fillMaxSize()
+                }
+            )
+        ) {
+            AndroidView(
+                factory = {
+                    PlayerView(it).apply {
+                        player = exo; setShowSubtitleButton(true); controllerShowTimeoutMs = 3000
+                        setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { v -> ui = v == View.VISIBLE })
+                    }
+                },
+                update = {
+                    it.resizeMode = when (mi) {
+                        0 -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        2 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        else -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        if (ui) {
+            Column(Modifier.align(Alignment.TopStart).padding(16.dp)) {
+                Text(cur.name, fontWeight = FontWeight.Bold, color = Color.White, fontSize = 18.sp)
+                if (info.isNotEmpty()) Text(info, color = Color.LightGray, fontSize = 12.sp)
+            }
+            Row(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                TextButton(onClick = { panel = !panel }) { Text("☰ Channels") }
+                TextButton(onClick = { step(-1) }) { Text("◀") }
+                TextButton(onClick = { step(1) }) { Text("▶") }
+                TextButton(onClick = { showInfo = !showInfo }) { Text("Info") }
+                TextButton(onClick = { sleepMin = listOf(0, 15, 30, 60)[(listOf(0, 15, 30, 60).indexOf(sleepMin) + 1) % 4] }) {
+                    Text(if (sleepMin == 0) "Sleep" else "Sleep ${sleepMin}m")
+                }
+                TextButton(onClick = { runCatching { (ctx as Activity).enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) } }) { Text("PiP") }
+                TextButton(onClick = onBack) { Text("✕") }
+            }
+            Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 110.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                names.forEachIndexed { i, n -> FilterChip(mi == i, { setAspect(i) }, { Text(n) }) }
+            }
+        }
+        if (toast.isNotEmpty()) Text(
+            toast, Modifier.align(Alignment.Center).clip(RoundedCornerShape(12.dp)).background(Color(0xCC000000)).padding(horizontal = 20.dp, vertical = 10.dp),
+            color = Color.White, fontSize = 20.sp
+        )
         if (panel) LazyColumn(Modifier.align(Alignment.CenterEnd).width(300.dp).fillMaxHeight().background(Color(0xDD000000)).padding(8.dp)) {
             items(list) { c ->
                 Text(c.name, Modifier.fillMaxWidth().clickable { cur = c; panel = false }.padding(10.dp), maxLines = 1,
