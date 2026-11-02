@@ -4,8 +4,20 @@ android {
     compileSdk = 34
     defaultConfig { applicationId = "com.bensal.tvlauncher"; minSdk = 26; targetSdk = 34; versionCode = 1; versionName = "0.1" }
     buildFeatures { compose = true }
+    val ksFile = System.getenv("KEYSTORE_FILE")
+    if (ksFile != null) {
+        signingConfigs {
+            create("padvision") {
+                storeFile = file(ksFile)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         debug {
+            if (ksFile != null) signingConfig = signingConfigs.getByName("padvision")
             isDebuggable = false
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
