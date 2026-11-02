@@ -1,6 +1,11 @@
 package com.bensal.tvlauncher
 
 import android.app.Activity
+import android.media.audiofx.LoudnessEnhancer
+import androidx.media3.exoplayer.DefaultLoadControl
+import org.json.JSONArray
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import android.net.Uri
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.media3.common.C
@@ -128,6 +133,23 @@ val themes = listOf(
     PTheme("Forest", 0xFF07130D, 0xFF0F2318, 0xFF3DDC84, 0xFF123B26)
 )
 
+fun bufferControl(level: Int) = when (level) {
+    0 -> DefaultLoadControl.Builder().setBufferDurationsMs(5_000, 15_000, 1_000, 2_000).build()
+    2 -> DefaultLoadControl.Builder().setBufferDurationsMs(30_000, 120_000, 2_500, 5_000).build()
+    else -> DefaultLoadControl.Builder().build()
+}
+
+suspend fun alive(u: String): Boolean = withContext(Dispatchers.IO) {
+    runCatching {
+        val c = URL(u).openConnection() as HttpURLConnection
+        c.connectTimeout = 4000; c.readTimeout = 4000
+        c.setRequestProperty("Range", "bytes=0-512")
+        val code = c.responseCode
+        c.disconnect()
+        code in 200..399
+    }.getOrDefault(false)
+}
+
 val vodWords = Regex("(?i)movie|series|drama|show|film|vod|cinema")
 fun isVod(c: Channel): Boolean {
     val u = c.url.substringBefore('?').lowercase()
@@ -215,6 +237,13 @@ class Store(ctx: Context) {
     var hiddenCh: Set<String>
         get() = p.getStringSet("hidch", emptySet())!!.toSet()
         set(v) { p.edit().putStringSet("hidch", v).apply() }
+    private var accState by mutableStateOf(p.getFloat("accent", -1f))
+    var accent: Float
+        get() = accState
+        set(v) { accState = v; p.edit().putFloat("accent", v).apply() }
+    var buffer: Int
+        get() = p.getInt("buf", 1)
+        set(v) { p.edit().putInt("buf", v).apply() }
     var wall: String
         get() = p.getString("wall", "")!!
         set(v) { p.edit().putString("wall", v).apply() }
@@ -253,7 +282,7 @@ fun Root() {
     val store = remember { Store(ctx) }
     var ti by remember { mutableStateOf(store.theme) }
     val t = themes[ti]
-    val accent = Color(t.accent)
+    val accent = if (store.accent >= 0f) Color.hsv(store.accent * 360f, 0.65f, 1f) else Color(t.accent)
     MaterialTheme(
         colorScheme = darkColorScheme(
             primary = accent, onPrimary = if (accent.luminance() > 0.4f) Color.Black else Color.White,
@@ -369,6 +398,9 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, pls: List<String>, o
     val ctx = LocalContext.current
     var city by remember { mutableStateOf(store.city) }
     var auto by remember { mutableStateOf(store.auto) }
+    var buf by remember { mutableStateOf(store.buffer) }
+    var msg by remember { mutableStateOf("") }
+    val clip = LocalClipboardManager.current
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching { ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -423,6 +455,45 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, pls: List<String>, o
                 }
             }
         }
+        item { Text("Streaming buffer", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("Low (fast start)", "Normal", "High (weak internet)").forEachIndexed { i, n ->
+                    FilterChip(buf == i, { buf = i; store.buffer = i }, { Text(n) })
+                }
+            }
+        }
+        item { Text("Custom accent colour", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Slider(value = store.accent.coerceAtLeast(0f), onValueChange = { store.accent = it }, modifier = Modifier.width(260.dp))
+                Box(Modifier.size(32.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
+                OutlinedButton(onClick = { store.accent = -1f }) { Text("Reset") }
+            }
+        }
+        item { Text("Backup", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = {
+                    val o = JSONObject()
+                    o.put("pl", JSONArray(store.playlists)); o.put("fav", JSONArray(store.favs.toList()))
+                    o.put("hid", JSONArray(store.hidden.toList())); o.put("hidch", JSONArray(store.hiddenCh.toList()))
+                    o.put("theme", store.theme); o.put("city", store.city)
+                    clip.setText(AnnotatedString(o.toString())); msg = "Backup copied. Paste it somewhere safe."
+                }) { Text("Copy backup") }
+                OutlinedButton(onClick = {
+                    runCatching {
+                        val o = JSONObject(clip.getText()?.text ?: "")
+                        fun arr(k: String): List<String> = o.optJSONArray(k)?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
+                        store.playlists = arr("pl"); store.favs = arr("fav").toSet()
+                        store.hidden = arr("hid").toSet(); store.hiddenCh = arr("hidch").toSet()
+                        store.city = o.optString("city", "")
+                        onTheme(o.optInt("theme", 0).coerceIn(0, themes.size - 1)); onChange(); msg = "Backup restored"
+                    }.onFailure { msg = "The clipboard does not hold a valid backup" }
+                }) { Text("Restore from clipboard") }
+            }
+        }
+        item { if (msg.isNotEmpty()) Text(msg, color = Color.LightGray) }
         item { Text("Personalize", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -460,7 +531,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 0.6", color = Color.LightGray)
+        Text("Version 0.7", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -501,7 +572,22 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
     var weather by remember { mutableStateOf("") }
     val visibleApps = remember(apps, hidden) { apps.filter { it.pkg !in hidden } }
     fun hide(pkg: String) { hidden = hidden + pkg; store.hidden = hidden }
-    val onChange: () -> Unit = { hidden = store.hidden; wall = store.wall; city = store.city; hiddenCh = store.hiddenCh }
+    val onChange: () -> Unit = { hidden = store.hidden; wall = store.wall; city = store.city; hiddenCh = store.hiddenCh; favs = store.favs; if (store.playlists != pls) { pls = store.playlists; reload() } }
+    var status by remember { mutableStateOf("") }
+    fun checkLinks(list: List<Channel>) {
+        scope.launch {
+            val l = list.filter { it.url.startsWith("http") }.take(300)
+            var done = 0
+            val dead = mutableListOf<String>()
+            l.chunked(20).forEach { chunk ->
+                chunk.map { c -> async { c.url to alive(c.url) } }.awaitAll().forEach { if (!it.second) dead += it.first }
+                done += chunk.size
+                status = "Checked $done/${l.size}, dead so far ${dead.size}"
+            }
+            hiddenCh = hiddenCh + dead; store.hiddenCh = hiddenCh
+            status = "Done: hid ${dead.size} dead channels out of ${l.size} checked"
+        }
+    }
     LaunchedEffect(city) { weather = if (city.isBlank()) "" else fetchWeather(city) }
     LaunchedEffect(Unit) {
         apps = withContext(Dispatchers.Default) { loadApps(ctx) }
@@ -560,7 +646,9 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
                             FilterChip(vod, { vod = true; g = null }, { Text("🎬 Movies & Series") })
                             FilterChip(az, { az = !az }, { Text("A–Z") })
                             FilterChip(false, { localPick.launch(arrayOf("video/*", "audio/*")) }, { Text("📁 Local video") })
+                            FilterChip(false, { checkLinks(shown) }, { Text("🧹 Check links") })
                         }
+                        if (status.isNotEmpty()) Text(status, fontSize = 12.sp, color = Color.LightGray)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
                             item { FilterChip(g == null, { g = null }, { Text("All") }) }
                             items(groups) { x -> FilterChip(g == x, { g = x }, { Text(x) }) }
@@ -629,11 +717,13 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
     var leftSide by remember { mutableStateOf(true) }
     var acc by remember { mutableStateOf(0f) }
     var locked by remember { mutableStateOf(false) }
+    var boost by remember { mutableStateOf(0) }
+    var enh by remember { mutableStateOf<LoudnessEnhancer?>(null) }
     val hist = remember { mutableStateListOf<Channel>() }
     val names = listOf("Fit", "Stretch", "Zoom", "16:9", "4:3", "21:9")
     val am = remember { ctx.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager }
     val exo = remember {
-        ExoPlayer.Builder(ctx, DefaultRenderersFactory(ctx).setEnableDecoderFallback(true)).build().also { p ->
+        ExoPlayer.Builder(ctx, DefaultRenderersFactory(ctx).setEnableDecoderFallback(true)).setLoadControl(bufferControl(sp.getInt("buf", 1))).build().also { p ->
             p.addListener(object : Player.Listener {
                 override fun onPlayerError(error: PlaybackException) {
                     Handler(Looper.getMainLooper()).postDelayed({ p.prepare() }, 3000)
@@ -659,6 +749,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
         c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         w.decorView.keepScreenOn = true
         onDispose {
+            runCatching { enh?.release() }
             exo.release()
             c.show(WindowInsetsCompat.Type.systemBars())
             w.decorView.keepScreenOn = false
@@ -683,6 +774,15 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
             delay(1000)
         }
         info = ""
+    }
+    fun applyBoost(b: Int) {
+        boost = b
+        runCatching {
+            if (enh == null) enh = LoudnessEnhancer(exo.audioSessionId)
+            enh?.setTargetGain(b * 300)
+            enh?.enabled = true
+        }
+        toast = if (b == 0) "Boost off" else "Volume boost +${b * 3} dB"
     }
     fun setAspect(i: Int) { mi = i; sp.edit().putInt("aspect", i).apply(); toast = "Aspect: ${names[i]}" }
     fun step(d: Int) {
@@ -761,6 +861,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
                 TextButton(onClick = { panel = !panel }) { Text("☰ Channels") }
                 TextButton(onClick = { step(-1) }) { Text("◀") }
                 TextButton(onClick = { step(1) }) { Text("▶") }
+                TextButton(onClick = { applyBoost((boost + 1) % 4) }) { Text(if (boost == 0) "Boost" else "+${boost * 3}dB") }
                 TextButton(onClick = { if (hist.size >= 2) cur = hist[hist.size - 2] }) { Text("⇄") }
                 TextButton(onClick = { subPick.launch(arrayOf("*/*")) }) { Text("CC+") }
                 TextButton(onClick = { locked = true; toast = "🔒 Locked, long-press to unlock" }) { Text("🔒") }
