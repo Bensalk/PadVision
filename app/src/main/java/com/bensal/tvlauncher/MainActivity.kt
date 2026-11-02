@@ -1,6 +1,14 @@
 package com.bensal.tvlauncher
 
 import android.app.Activity
+import android.app.PictureInPictureParams
+import android.util.Rational
+import org.json.JSONObject
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.layout.ContentScale
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -106,6 +114,15 @@ suspend fun fetch(u: String): List<Channel> = withContext(Dispatchers.IO) {
     }.getOrDefault(emptyList())
 }
 
+suspend fun fetchWeather(city: String): String = withContext(Dispatchers.IO) {
+    runCatching {
+        val g = JSONObject(URL("https://geocoding-api.open-meteo.com/v1/search?count=1&name=" + java.net.URLEncoder.encode(city, "UTF-8")).readText())
+        val r = g.getJSONArray("results").getJSONObject(0)
+        val w = JSONObject(URL("https://api.open-meteo.com/v1/forecast?current_weather=true&latitude=${r.getDouble("latitude")}&longitude=${r.getDouble("longitude")}").readText())
+        "${r.getString("name")}  ${w.getJSONObject("current_weather").getDouble("temperature").toInt()}°C"
+    }.getOrDefault("")
+}
+
 fun loadApps(ctx: Context): List<AppItem> {
     val pm = ctx.packageManager
     val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -137,6 +154,18 @@ class Store(ctx: Context) {
     var pin: String
         get() = p.getString("pin", "")!!
         set(v) { p.edit().putString("pin", v).apply() }
+    var hidden: Set<String>
+        get() = p.getStringSet("hid", emptySet())!!.toSet()
+        set(v) { p.edit().putStringSet("hid", v).apply() }
+    var wall: String
+        get() = p.getString("wall", "")!!
+        set(v) { p.edit().putString("wall", v).apply() }
+    var city: String
+        get() = p.getString("city", "")!!
+        set(v) { p.edit().putString("city", v).apply() }
+    var auto: Boolean
+        get() = p.getBoolean("auto", false)
+        set(v) { p.edit().putBoolean("auto", v).apply() }
 }
 
 class MainActivity : ComponentActivity() {
@@ -159,7 +188,7 @@ fun Root() {
             primary = accent, onPrimary = if (accent.luminance() > 0.4f) Color.Black else Color.White,
             background = Color(t.bg), surface = Color(t.surface), surfaceVariant = Color(t.surface)
         )
-    ) { App(store, ti) { ti = it; store.theme = it } }
+    ) { CompositionLocalProvider(LocalContentColor provides Color.White) { App(store, ti) { ti = it; store.theme = it } } }
 }
 
 @Composable
@@ -182,8 +211,9 @@ fun TvCard(c: Channel, fav: Boolean, onFav: () -> Unit, onClick: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun AppTile(a: AppItem) {
+fun AppTile(a: AppItem, onHide: () -> Unit = {}) {
     val ctx = LocalContext.current
     var f by remember { mutableStateOf(false) }
     val s by animateFloatAsState(if (f) 1.12f else 1f, label = "a")
@@ -191,7 +221,7 @@ fun AppTile(a: AppItem) {
     Column(
         Modifier.width(100.dp).scale(s).clip(shape)
             .border(if (f) 3.dp else 0.dp, MaterialTheme.colorScheme.primary, shape)
-            .onFocusChanged { f = it.isFocused }.clickable { ctx.startActivity(a.intent) }.padding(8.dp),
+            .onFocusChanged { f = it.isFocused }.combinedClickable(onLongClick = onHide) { ctx.startActivity(a.intent) }.padding(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Image(a.icon, null, Modifier.size(64.dp))
@@ -213,7 +243,7 @@ fun Hero(c: Channel?, fav: Boolean, onPlay: () -> Unit, onFav: () -> Unit) {
         Modifier.fillMaxWidth().height(260.dp).clip(RoundedCornerShape(24.dp))
             .background(Brush.horizontalGradient(listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.35f), MaterialTheme.colorScheme.surface)))
     ) {
-        if (c?.logo != null) AsyncImage(c.logo, null, Modifier.align(Alignment.CenterEnd).padding(24.dp).size(200.dp).blur(24.dp).alpha(0.5f))
+        if (c?.logo != null) AsyncImage(c.logo, null, Modifier.align(Alignment.CenterEnd).padding(24.dp).size(200.dp).alpha(0.5f))
         Column(Modifier.align(Alignment.CenterStart).padding(32.dp)) {
             Text(c?.name ?: "Welcome to PadVision", fontSize = 36.sp, fontWeight = FontWeight.Bold, maxLines = 1)
             Text(c?.group ?: "Add an M3U link in Settings to get started", color = Color.LightGray)
@@ -250,7 +280,7 @@ fun NavItem(icon: String, label: String, sel: Boolean, expanded: Boolean, onClic
 @Composable
 fun Sidebar(tab: Int, expanded: Boolean, onToggle: () -> Unit, onTab: (Int) -> Unit) {
     val w by animateDpAsState(if (expanded) 200.dp else 72.dp, label = "w")
-    Column(Modifier.width(w).fillMaxHeight().background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)).padding(8.dp)) {
+    Column(Modifier.width(w).fillMaxHeight().background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f)).padding(8.dp)) {
         NavItem("☰", "PadVision", false, expanded) { onToggle() }
         Spacer(Modifier.height(8.dp))
         listOf("Home" to "⌂", "Live TV" to "📺", "Apps" to "▦", "Search" to "⌕", "Settings" to "⚙").forEachIndexed { i, (l, ic) ->
@@ -262,7 +292,16 @@ fun Sidebar(tab: Int, expanded: Boolean, onToggle: () -> Unit, onTab: (Int) -> U
 }
 
 @Composable
-fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, pls: List<String>, onAdd: () -> Unit, onRemove: (String) -> Unit, onRefresh: () -> Unit) {
+fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, pls: List<String>, onAdd: () -> Unit, onRemove: (String) -> Unit, onRefresh: () -> Unit, onChange: () -> Unit) {
+    val ctx = LocalContext.current
+    var city by remember { mutableStateOf(store.city) }
+    var auto by remember { mutableStateOf(store.auto) }
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching { ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            store.wall = uri.toString(); onChange()
+        }
+    }
     var ok by remember { mutableStateOf(store.pin.isEmpty()) }
     var entry by remember { mutableStateOf("") }
     var newPin by remember { mutableStateOf("") }
@@ -294,6 +333,26 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, pls: List<String>, o
             }
         }
         item { Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(onClick = onAdd) { Text("Add M3U link") }; OutlinedButton(onClick = onRefresh) { Text("Refresh") } } }
+        item { Text("Personalize", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = { pick.launch(arrayOf("image/*")) }) { Text("Choose wallpaper") }
+                OutlinedButton(onClick = { store.wall = ""; onChange() }) { Text("Remove wallpaper") }
+            }
+        }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(city, { city = it }, singleLine = true, label = { Text("Weather city") })
+                Button(onClick = { store.city = city.trim(); onChange() }) { Text("Save") }
+            }
+        }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Auto-play last channel on launch", Modifier.weight(1f))
+                Switch(auto, { auto = it; store.auto = it })
+            }
+        }
+        item { OutlinedButton(onClick = { store.hidden = emptySet(); onChange() }) { Text("Unhide all apps (long-press an app to hide it)") } }
         item { Text("PIN lock for Settings", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
         item {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -310,7 +369,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 0.2", color = Color.LightGray)
+        Text("Version 0.3", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -343,40 +402,56 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
         favs = if (c.url in favs) favs - c.url else favs + c.url
         store.favs = favs
     }
-    LaunchedEffect(Unit) { apps = withContext(Dispatchers.Default) { loadApps(ctx) }; reload() }
+    var hidden by remember { mutableStateOf(store.hidden) }
+    var wall by remember { mutableStateOf(store.wall) }
+    var city by remember { mutableStateOf(store.city) }
+    var weather by remember { mutableStateOf("") }
+    val visibleApps = remember(apps, hidden) { apps.filter { it.pkg !in hidden } }
+    fun hide(pkg: String) { hidden = hidden + pkg; store.hidden = hidden }
+    val onChange: () -> Unit = { hidden = store.hidden; wall = store.wall; city = store.city }
+    LaunchedEffect(city) { weather = if (city.isBlank()) "" else fetchWeather(city) }
+    LaunchedEffect(Unit) {
+        apps = withContext(Dispatchers.Default) { loadApps(ctx) }
+        loading = true; channels = pls.flatMap { fetch(it) }; loading = false
+        if (store.auto) store.recents.firstOrNull()?.let { u -> channels.firstOrNull { it.url == u }?.let { playing = it } }
+    }
     val cs = MaterialTheme.colorScheme
 
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(themes[ti].glow), cs.background)))) {
-        Row(Modifier.fillMaxSize().systemBarsPadding()) {
-            Sidebar(tab, expanded, { expanded = !expanded }) { tab = it }
-            Box(Modifier.weight(1f).padding(16.dp)) {
+        if (wall.isNotEmpty()) {
+            AsyncImage(wall, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Box(Modifier.fillMaxSize().background(Color(0xAA000000)))
+        }
+        Box(Modifier.fillMaxSize().systemBarsPadding()) {
+            Box(Modifier.fillMaxSize().padding(start = 88.dp, top = 16.dp, end = 16.dp, bottom = 16.dp)) {
                 when (tab) {
                     0 -> {
-                        val recentCh = recents.mapNotNull { u -> channels.firstOrNull { it.url == u } }
+                        val byUrl = remember(channels) { channels.associateBy { it.url } }
+                        val recentCh = remember(recents, byUrl) { recents.mapNotNull { byUrl[it] } }
                         val hero = recentCh.firstOrNull() ?: channels.firstOrNull()
-                        val groups = channels.map { it.group }.distinct().sorted()
+                        val byGroup = remember(channels) { channels.groupBy { it.group }.toSortedMap() }
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                            item { Text(time, fontSize = 36.sp, fontWeight = FontWeight.Light) }
+                            item { Row(verticalAlignment = Alignment.CenterVertically) { Text(time, fontSize = 36.sp, fontWeight = FontWeight.Light); if (weather.isNotEmpty()) { Spacer(Modifier.width(24.dp)); Text("🌤 $weather", fontSize = 22.sp) } } }
                             item { Hero(hero, hero != null && hero.url in favs, { hero?.let { playing = it } }, { hero?.let { toggleFav(it) } }) }
                             if (recentCh.isNotEmpty()) item {
                                 Shelf("Continue Watching") { items(recentCh) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } }
                             }
-                            val fl = channels.filter { it.url in favs }
+                            val fl = remember(channels, favs) { channels.filter { it.url in favs } }
                             if (fl.isNotEmpty()) item {
                                 Shelf("Favorites") { items(fl) { c -> TvCard(c, true, { toggleFav(c) }) { playing = c } } }
                             }
-                            val games = apps.filter { it.isGame }
-                            if (games.isNotEmpty()) item { Shelf("Games") { items(games) { AppTile(it) } } }
-                            item { Shelf("Apps") { items(apps) { AppTile(it) } } }
-                            groups.take(15).forEach { g ->
-                                item { Shelf(g) { items(channels.filter { it.group == g }.take(30)) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
+                            val games = visibleApps.filter { it.isGame }
+                            if (games.isNotEmpty()) item { Shelf("Games") { items(games) { AppTile(it) { hide(it.pkg) } } } }
+                            item { Shelf("Apps") { items(visibleApps) { AppTile(it) { hide(it.pkg) } } } }
+                            byGroup.entries.take(15).forEach { (g, glist) ->
+                                item { Shelf(g) { items(glist.take(30)) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
                             }
                         }
                     }
                     1 -> Column {
                         var g by remember { mutableStateOf<String?>(null) }
-                        val groups = channels.map { it.group }.distinct().sorted()
-                        val shown = channels.filter { g == null || it.group == g }
+                        val groups = remember(channels) { channels.map { it.group }.distinct().sorted() }
+                        val shown = remember(channels, g) { channels.filter { g == null || it.group == g } }
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
                             item { FilterChip(g == null, { g = null }, { Text("All") }) }
                             items(groups) { x -> FilterChip(g == x, { g = x }, { Text(x) }) }
@@ -387,24 +462,25 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
                             items(shown) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } }
                         }
                     }
-                    2 -> LazyVerticalGrid(GridCells.Adaptive(110.dp)) { items(apps) { AppTile(it) } }
+                    2 -> LazyVerticalGrid(GridCells.Adaptive(110.dp)) { items(visibleApps) { AppTile(it) { hide(it.pkg) } } }
                     3 -> Column {
                         var q by remember { mutableStateOf("") }
                         OutlinedTextField(q, { q = it }, singleLine = true, label = { Text("Search channels and apps") }, modifier = Modifier.fillMaxWidth())
                         if (q.isNotBlank()) {
-                            val ar = apps.filter { it.label.contains(q, true) }
-                            if (ar.isNotEmpty()) Shelf("Apps") { items(ar) { AppTile(it) } }
-                            val cr = channels.filter { it.name.contains(q, true) }.take(80)
+                            val ar = visibleApps.filter { it.label.contains(q, true) }
+                            if (ar.isNotEmpty()) Shelf("Apps") { items(ar) { AppTile(it) { hide(it.pkg) } } }
+                            val cr = remember(q, channels) { channels.filter { it.name.contains(q, true) }.take(80) }
                             LazyVerticalGrid(GridCells.Adaptive(250.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                                 items(cr) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } }
                             }
                         }
                     }
                     4 -> Settings(store, ti, onTheme, pls, { showAdd = true },
-                        { u -> pls = pls - u; store.playlists = pls; reload() }, { reload() })
+                        { u -> pls = pls - u; store.playlists = pls; reload() }, { reload() }, onChange)
                     else -> About()
                 }
             }
+            Sidebar(tab, expanded, { expanded = !expanded }) { tab = it }
         }
         playing?.let { p ->
             PlayerScreen(channels, p, onBack = { playing = null }) { c ->
@@ -481,6 +557,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
             TextButton(onClick = { sleepMin = listOf(0, 15, 30, 60)[(listOf(0, 15, 30, 60).indexOf(sleepMin) + 1) % 4] }) {
                 Text(if (sleepMin == 0) "Sleep" else "Sleep ${sleepMin}m")
             }
+            TextButton(onClick = { runCatching { (ctx as Activity).enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()) } }) { Text("PiP") }
             TextButton(onClick = onBack) { Text("✕") }
         }
         if (panel) LazyColumn(Modifier.align(Alignment.CenterEnd).width(300.dp).fillMaxHeight().background(Color(0xDD000000)).padding(8.dp)) {
