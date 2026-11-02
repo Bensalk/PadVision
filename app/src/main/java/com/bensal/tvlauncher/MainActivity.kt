@@ -1,6 +1,10 @@
 package com.bensal.tvlauncher
 
 import android.app.Activity
+import android.net.Uri
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.media3.common.C
+import androidx.media3.common.MimeTypes
 import android.view.View
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
@@ -86,6 +90,14 @@ val library = listOf(
     Lib("Popular", "India", IPTV + "countries/in.m3u"),
     Lib("Popular", "Malayalam", IPTV + "languages/mal.m3u"),
     Lib("Popular", "English", IPTV + "languages/eng.m3u"),
+    Lib("TV Shows & More", "Series", IPTV + "categories/series.m3u"),
+    Lib("TV Shows & More", "Animation", IPTV + "categories/animation.m3u"),
+    Lib("TV Shows & More", "Family", IPTV + "categories/family.m3u"),
+    Lib("TV Shows & More", "Classic", IPTV + "categories/classic.m3u"),
+    Lib("TV Shows & More", "Culture", IPTV + "categories/culture.m3u"),
+    Lib("TV Shows & More", "Lifestyle", IPTV + "categories/lifestyle.m3u"),
+    Lib("TV Shows & More", "Cooking", IPTV + "categories/cooking.m3u"),
+    Lib("TV Shows & More", "Travel", IPTV + "categories/travel.m3u"),
     Lib("Categories", "News", IPTV + "categories/news.m3u"),
     Lib("Categories", "Music", IPTV + "categories/music.m3u"),
     Lib("Categories", "Sports", IPTV + "categories/sports.m3u"),
@@ -116,6 +128,12 @@ val themes = listOf(
     PTheme("Forest", 0xFF07130D, 0xFF0F2318, 0xFF3DDC84, 0xFF123B26)
 )
 
+val vodWords = Regex("(?i)movie|series|drama|show|film|vod|cinema")
+fun isVod(c: Channel): Boolean {
+    val u = c.url.substringBefore('?').lowercase()
+    return u.endsWith(".mp4") || u.endsWith(".mkv") || u.endsWith(".avi") || u.endsWith(".mov") || vodWords.containsMatchIn(c.group)
+}
+
 fun parseM3u(text: String): List<Channel> {
     val out = mutableListOf<Channel>()
     var name = ""; var group = "Other"; var logo: String? = null
@@ -135,11 +153,19 @@ fun parseM3u(text: String): List<Channel> {
     return out
 }
 
+object AppCtx { lateinit var ctx: Context }
+val LocalHide = compositionLocalOf<(Channel) -> Unit> { { _ -> } }
+
 suspend fun fetch(u: String): List<Channel> = withContext(Dispatchers.IO) {
     runCatching {
-        val c = URL(u).openConnection() as HttpURLConnection
-        c.connectTimeout = 15000; c.readTimeout = 30000
-        parseM3u(c.inputStream.bufferedReader().readText())
+        val text = if (u.startsWith("content://")) {
+            AppCtx.ctx.contentResolver.openInputStream(Uri.parse(u))!!.bufferedReader().readText()
+        } else {
+            val c = URL(u).openConnection() as HttpURLConnection
+            c.connectTimeout = 15000; c.readTimeout = 30000
+            c.inputStream.bufferedReader().readText()
+        }
+        parseM3u(text)
     }.getOrDefault(emptyList())
 }
 
@@ -186,6 +212,9 @@ class Store(ctx: Context) {
     var hidden: Set<String>
         get() = p.getStringSet("hid", emptySet())!!.toSet()
         set(v) { p.edit().putStringSet("hid", v).apply() }
+    var hiddenCh: Set<String>
+        get() = p.getStringSet("hidch", emptySet())!!.toSet()
+        set(v) { p.edit().putStringSet("hidch", v).apply() }
     var wall: String
         get() = p.getString("wall", "")!!
         set(v) { p.edit().putString("wall", v).apply() }
@@ -201,6 +230,19 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(s: Bundle?) {
         super.onCreate(s)
         enableEdgeToEdge()
+        AppCtx.ctx = applicationContext
+        runCatching {
+            @Suppress("DEPRECATION")
+            val d = windowManager.defaultDisplay
+            val cur = d.mode
+            val best = d.supportedModes
+                .filter { it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight }
+                .maxByOrNull { it.refreshRate }
+            if (best != null) window.attributes = window.attributes.also {
+                it.preferredDisplayModeId = best.modeId
+                it.preferredRefreshRate = best.refreshRate
+            }
+        }
         setContent { Root() }
     }
 }
@@ -220,8 +262,10 @@ fun Root() {
     ) { CompositionLocalProvider(LocalContentColor provides Color.White) { App(store, ti) { ti = it; store.theme = it } } }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TvCard(c: Channel, fav: Boolean, onFav: () -> Unit, onClick: () -> Unit) {
+    val hide = LocalHide.current
     var f by remember { mutableStateOf(false) }
     val s by animateFloatAsState(if (f) 1.08f else 1f, label = "s")
     val shape = RoundedCornerShape(16.dp)
@@ -229,7 +273,7 @@ fun TvCard(c: Channel, fav: Boolean, onFav: () -> Unit, onClick: () -> Unit) {
         Modifier.width(240.dp).height(140.dp).scale(s).clip(shape)
             .background(MaterialTheme.colorScheme.surface)
             .border(if (f) 3.dp else 0.dp, MaterialTheme.colorScheme.primary, shape)
-            .onFocusChanged { f = it.isFocused }.clickable(onClick = onClick)
+            .onFocusChanged { f = it.isFocused }.combinedClickable(onLongClick = { hide(c) }, onClick = onClick)
     ) {
         AsyncImage(c.logo, null, Modifier.align(Alignment.Center).size(72.dp))
         Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color(0x99000000)).padding(8.dp)) {
@@ -334,6 +378,12 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, pls: List<String>, o
     var ok by remember { mutableStateOf(store.pin.isEmpty()) }
     var entry by remember { mutableStateOf("") }
     var newPin by remember { mutableStateOf("") }
+    val importPick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching { ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            onAddUrl(uri.toString())
+        }
+    }
     if (!ok) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Settings are locked", fontWeight = FontWeight.Bold, fontSize = 20.sp)
@@ -361,7 +411,7 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, pls: List<String>, o
                 TextButton(onClick = { onRemove(u) }) { Text("Remove") }
             }
         }
-        item { Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(onClick = onAdd) { Text("Add M3U link") }; OutlinedButton(onClick = onRefresh) { Text("Refresh") } } }
+        item { Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(onClick = onAdd) { Text("Add M3U link") }; OutlinedButton(onClick = onRefresh) { Text("Refresh") }; OutlinedButton(onClick = { importPick.launch(arrayOf("*/*")) }) { Text("Import M3U file") } } }
         item { Text("Playlist library", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
         library.groupBy { it.section }.forEach { (sec, l) ->
             item { Text(sec, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold) }
@@ -393,6 +443,7 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, pls: List<String>, o
             }
         }
         item { OutlinedButton(onClick = { store.hidden = emptySet(); onChange() }) { Text("Unhide all apps (long-press an app to hide it)") } }
+        item { OutlinedButton(onClick = { store.hiddenCh = emptySet(); onChange() }) { Text("Unhide all channels (long-press a channel to hide it)") } }
         item { Text("PIN lock for Settings", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
         item {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -409,7 +460,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 0.5", color = Color.LightGray)
+        Text("Version 0.6", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -421,7 +472,9 @@ fun About() {
 fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var channels by remember { mutableStateOf(listOf<Channel>()) }
+    var channelsRaw by remember { mutableStateOf(listOf<Channel>()) }
+    var hiddenCh by remember { mutableStateOf(store.hiddenCh) }
+    val channels = remember(channelsRaw, hiddenCh) { channelsRaw.filter { it.url !in hiddenCh } }
     var apps by remember { mutableStateOf(listOf<AppItem>()) }
     var favs by remember { mutableStateOf(store.favs) }
     var pls by remember { mutableStateOf(store.playlists) }
@@ -437,7 +490,7 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
             delay(1000)
         }
     }
-    fun reload() { scope.launch { loading = true; channels = pls.flatMap { fetch(it) }; loading = false } }
+    fun reload() { scope.launch { loading = true; channelsRaw = pls.flatMap { fetch(it) }.distinctBy { it.url }; loading = false } }
     val toggleFav: (Channel) -> Unit = { c ->
         favs = if (c.url in favs) favs - c.url else favs + c.url
         store.favs = favs
@@ -448,15 +501,22 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
     var weather by remember { mutableStateOf("") }
     val visibleApps = remember(apps, hidden) { apps.filter { it.pkg !in hidden } }
     fun hide(pkg: String) { hidden = hidden + pkg; store.hidden = hidden }
-    val onChange: () -> Unit = { hidden = store.hidden; wall = store.wall; city = store.city }
+    val onChange: () -> Unit = { hidden = store.hidden; wall = store.wall; city = store.city; hiddenCh = store.hiddenCh }
     LaunchedEffect(city) { weather = if (city.isBlank()) "" else fetchWeather(city) }
     LaunchedEffect(Unit) {
         apps = withContext(Dispatchers.Default) { loadApps(ctx) }
-        loading = true; channels = pls.flatMap { fetch(it) }; loading = false
-        if (store.auto) store.recents.firstOrNull()?.let { u -> channels.firstOrNull { it.url == u }?.let { playing = it } }
+        loading = true; channelsRaw = pls.flatMap { fetch(it) }.distinctBy { it.url }; loading = false
+        if (store.auto) store.recents.firstOrNull()?.let { u -> channelsRaw.firstOrNull { it.url == u }?.let { playing = it } }
     }
     val cs = MaterialTheme.colorScheme
+    val localPick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching { ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            playing = Channel(uri.lastPathSegment?.substringAfterLast('/') ?: "Local video", uri.toString(), "Local", null)
+        }
+    }
 
+    CompositionLocalProvider(LocalHide provides { c -> hiddenCh = hiddenCh + c.url; store.hiddenCh = hiddenCh }) {
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(themes[ti].glow), cs.background)))) {
         if (wall.isNotEmpty()) {
             AsyncImage(wall, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -490,8 +550,17 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
                     }
                     1 -> Column {
                         var g by remember { mutableStateOf<String?>(null) }
-                        val groups = remember(channels) { channels.map { it.group }.distinct().sorted() }
-                        val shown = remember(channels, g) { channels.filter { g == null || it.group == g } }
+                        var vod by remember { mutableStateOf(false) }
+                        var az by remember { mutableStateOf(false) }
+                        val base = remember(channels, vod, az) { channels.filter { isVod(it) == vod }.let { l -> if (az) l.sortedBy { it.name.lowercase() } else l } }
+                        val groups = remember(base) { base.map { it.group }.distinct().sorted() }
+                        val shown = remember(base, g) { base.filter { g == null || it.group == g } }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
+                            FilterChip(!vod, { vod = false; g = null }, { Text("📺 Live TV") })
+                            FilterChip(vod, { vod = true; g = null }, { Text("🎬 Movies & Series") })
+                            FilterChip(az, { az = !az }, { Text("A–Z") })
+                            FilterChip(false, { localPick.launch(arrayOf("video/*", "audio/*")) }, { Text("📁 Local video") })
+                        }
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
                             item { FilterChip(g == null, { g = null }, { Text("All") }) }
                             items(groups) { x -> FilterChip(g == x, { g = x }, { Text(x) }) }
@@ -528,6 +597,7 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
             }
         }
     }
+    }
     if (showAdd) {
         var t by remember { mutableStateOf("") }
         AlertDialog(
@@ -558,6 +628,8 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
     var sleepMin by remember { mutableStateOf(0) }
     var leftSide by remember { mutableStateOf(true) }
     var acc by remember { mutableStateOf(0f) }
+    var locked by remember { mutableStateOf(false) }
+    val hist = remember { mutableStateListOf<Channel>() }
     val names = listOf("Fit", "Stretch", "Zoom", "16:9", "4:3", "21:9")
     val am = remember { ctx.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager }
     val exo = remember {
@@ -567,6 +639,17 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
                     Handler(Looper.getMainLooper()).postDelayed({ p.prepare() }, 3000)
                 }
             })
+        }
+    }
+    val subPick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching { ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            val sub = MediaItem.SubtitleConfiguration.Builder(uri).setMimeType(MimeTypes.APPLICATION_SUBRIP)
+                .setLanguage("und").setSelectionFlags(C.SELECTION_FLAG_DEFAULT).build()
+            val pos = exo.currentPosition
+            exo.setMediaItem(MediaItem.Builder().setUri(cur.url).setSubtitleConfigurations(listOf(sub)).build())
+            exo.seekTo(pos); exo.prepare(); exo.playWhenReady = true
+            toast = "Subtitles loaded"
         }
     }
     DisposableEffect(Unit) {
@@ -582,7 +665,14 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
         }
     }
     LaunchedEffect(cur) {
-        exo.setMediaItem(MediaItem.fromUri(cur.url)); exo.prepare(); exo.playWhenReady = true; onPlay(cur)
+        exo.setMediaItem(MediaItem.fromUri(cur.url))
+        if (isVod(cur)) exo.seekTo(sp.getLong("pos_" + cur.url, 0L))
+        exo.prepare(); exo.playWhenReady = true; onPlay(cur)
+        if (hist.lastOrNull()?.url != cur.url) hist.add(cur)
+        while (true) {
+            delay(5000)
+            if (isVod(cur)) sp.edit().putLong("pos_" + cur.url, exo.currentPosition).apply()
+        }
     }
     LaunchedEffect(sleepMin) { if (sleepMin > 0) { delay(sleepMin * 60_000L); onBack() } }
     LaunchedEffect(toast) { if (toast.isNotEmpty()) { delay(1500); toast = "" } }
@@ -605,6 +695,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
             detectVerticalDragGestures(
                 onDragStart = { o -> leftSide = o.x < size.width / 2; acc = 0f },
                 onVerticalDrag = { _, dy ->
+                    if (locked) return@detectVerticalDragGestures
                     if (leftSide) {
                         val w = (ctx as Activity).window
                         val b0 = if (w.attributes.screenBrightness < 0) 0.5f else w.attributes.screenBrightness
@@ -624,6 +715,14 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
                     }
                 }
             )
+        }.pointerInput(Unit) {
+            detectTapGestures(onDoubleTap = { o ->
+                if (!locked) {
+                    val d = if (o.x < size.width / 2) -10_000L else 10_000L
+                    exo.seekTo((exo.currentPosition + d).coerceAtLeast(0L))
+                    toast = if (d < 0) "⏪ 10s" else "10s ⏩"
+                }
+            })
         }
     ) {
         Box(
@@ -653,7 +752,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
                 modifier = Modifier.fillMaxSize()
             )
         }
-        if (ui) {
+        if (ui && !locked) {
             Column(Modifier.align(Alignment.TopStart).padding(16.dp)) {
                 Text(cur.name, fontWeight = FontWeight.Bold, color = Color.White, fontSize = 18.sp)
                 if (info.isNotEmpty()) Text(info, color = Color.LightGray, fontSize = 12.sp)
@@ -662,6 +761,9 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
                 TextButton(onClick = { panel = !panel }) { Text("☰ Channels") }
                 TextButton(onClick = { step(-1) }) { Text("◀") }
                 TextButton(onClick = { step(1) }) { Text("▶") }
+                TextButton(onClick = { if (hist.size >= 2) cur = hist[hist.size - 2] }) { Text("⇄") }
+                TextButton(onClick = { subPick.launch(arrayOf("*/*")) }) { Text("CC+") }
+                TextButton(onClick = { locked = true; toast = "🔒 Locked, long-press to unlock" }) { Text("🔒") }
                 TextButton(onClick = { showInfo = !showInfo }) { Text("Info") }
                 TextButton(onClick = { sleepMin = listOf(0, 15, 30, 60)[(listOf(0, 15, 30, 60).indexOf(sleepMin) + 1) % 4] }) {
                     Text(if (sleepMin == 0) "Sleep" else "Sleep ${sleepMin}m")
@@ -673,6 +775,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
                 names.forEachIndexed { i, n -> FilterChip(mi == i, { setAspect(i) }, { Text(n) }) }
             }
         }
+        if (locked) Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onLongPress = { locked = false; toast = "Unlocked" }) })
         if (toast.isNotEmpty()) Text(
             toast, Modifier.align(Alignment.Center).clip(RoundedCornerShape(12.dp)).background(Color(0xCC000000)).padding(horizontal = 20.dp, vertical = 10.dp),
             color = Color.White, fontSize = 20.sp
