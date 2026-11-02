@@ -149,7 +149,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun Root() {
-    val store = remember { Store(LocalContext.current) }
+    val ctx = LocalContext.current
+    val store = remember { Store(ctx) }
     var ti by remember { mutableStateOf(store.theme) }
     val t = themes[ti]
     val accent = Color(t.accent)
