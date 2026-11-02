@@ -430,13 +430,13 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
                         val recentCh = remember(recents, byUrl) { recents.mapNotNull { byUrl[it] } }
                         val hero = recentCh.firstOrNull() ?: channels.firstOrNull()
                         val byGroup = remember(channels) { channels.groupBy { it.group }.toSortedMap() }
+                        val fl = remember(channels, favs) { channels.filter { it.url in favs } }
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                             item { Row(verticalAlignment = Alignment.CenterVertically) { Text(time, fontSize = 36.sp, fontWeight = FontWeight.Light); if (weather.isNotEmpty()) { Spacer(Modifier.width(24.dp)); Text("🌤 $weather", fontSize = 22.sp) } } }
                             item { Hero(hero, hero != null && hero.url in favs, { hero?.let { playing = it } }, { hero?.let { toggleFav(it) } }) }
                             if (recentCh.isNotEmpty()) item {
                                 Shelf("Continue Watching") { items(recentCh) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } }
                             }
-                            val fl = remember(channels, favs) { channels.filter { it.url in favs } }
                             if (fl.isNotEmpty()) item {
                                 Shelf("Favorites") { items(fl) { c -> TvCard(c, true, { toggleFav(c) }) { playing = c } } }
                             }
