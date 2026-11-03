@@ -735,6 +735,8 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
             status = "Done: hid ${dead.size} dead channels out of ${l.size} checked"
         }
     }
+    var lastTouch by remember { mutableStateOf(System.currentTimeMillis()) }
+    var ambient by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { while (true) { delay(30 * 60_000L); reload() } }
     LaunchedEffect(Unit) { while (true) { delay(5000); if (playing == null && System.currentTimeMillis() - lastTouch > 120_000) ambient = true } }
     LaunchedEffect(epgUrl, channelsRaw.size) {
@@ -753,8 +755,6 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
     val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { q = it; tab = 3 }
     }
-    var lastTouch by remember { mutableStateOf(System.currentTimeMillis()) }
-    var ambient by remember { mutableStateOf(false) }
     val localPick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching { ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
