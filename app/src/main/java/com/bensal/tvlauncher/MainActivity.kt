@@ -1,6 +1,8 @@
 package com.bensal.tvlauncher
 
 import android.app.Activity
+import android.speech.RecognizerIntent
+import androidx.compose.ui.input.pointer.PointerEventPass
 import android.media.audiofx.LoudnessEnhancer
 import androidx.media3.exoplayer.DefaultLoadControl
 import org.json.JSONArray
@@ -150,6 +152,7 @@ suspend fun alive(u: String): Boolean = withContext(Dispatchers.IO) {
     }.getOrDefault(false)
 }
 
+val kidsWords = Regex("(?i)kid|child|cartoon|animation|family|junior|baby|toon")
 val vodWords = Regex("(?i)movie|series|drama|show|film|vod|cinema")
 fun isVod(c: Channel): Boolean {
     val u = c.url.substringBefore('?').lowercase()
@@ -214,8 +217,8 @@ fun loadApps(ctx: Context): List<AppItem> {
     }.filter { it.pkg != ctx.packageName }.sortedBy { it.label.lowercase() }
 }
 
-class Store(ctx: Context) {
-    private val p = ctx.getSharedPreferences("tv", Context.MODE_PRIVATE)
+class Store(ctx: Context, val profile: Int = 0) {
+    private val p = ctx.getSharedPreferences(if (profile == 0) "tv" else "tv_p$profile", Context.MODE_PRIVATE)
     var playlists: List<String>
         get() = p.getString("pl", "")!!.split("\n").filter { it.isNotBlank() }
         set(v) { p.edit().putString("pl", v.joinToString("\n")).apply() }
@@ -244,6 +247,12 @@ class Store(ctx: Context) {
     var buffer: Int
         get() = p.getInt("buf", 1)
         set(v) { p.edit().putInt("buf", v).apply() }
+    var kids: Boolean
+        get() = p.getBoolean("kids", profile == 3)
+        set(v) { p.edit().putBoolean("kids", v).apply() }
+    var searches: List<String>
+        get() = p.getString("srch", "")!!.split("\n").filter { it.isNotBlank() }
+        set(v) { p.edit().putString("srch", v.joinToString("\n")).apply() }
     var wall: String
         get() = p.getString("wall", "")!!
         set(v) { p.edit().putString("wall", v).apply() }
@@ -279,8 +288,10 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun Root() {
     val ctx = LocalContext.current
-    val store = remember { Store(ctx) }
-    var ti by remember { mutableStateOf(store.theme) }
+    val meta = remember { ctx.getSharedPreferences("meta", Context.MODE_PRIVATE) }
+    var prof by remember { mutableStateOf(meta.getInt("prof", 0)) }
+    val store = remember(prof) { Store(ctx, prof) }
+    var ti by remember(prof) { mutableStateOf(store.theme) }
     val t = themes[ti]
     val accent = if (store.accent >= 0f) Color.hsv(store.accent * 360f, 0.65f, 1f) else Color(t.accent)
     MaterialTheme(
@@ -288,7 +299,7 @@ fun Root() {
             primary = accent, onPrimary = if (accent.luminance() > 0.4f) Color.Black else Color.White,
             background = Color(t.bg), surface = Color(t.surface), surfaceVariant = Color(t.surface)
         )
-    ) { CompositionLocalProvider(LocalContentColor provides Color.White) { App(store, ti) { ti = it; store.theme = it } } }
+    ) { CompositionLocalProvider(LocalContentColor provides Color.White) { key(prof) { App(store, ti, { pr -> meta.edit().putInt("prof", pr).apply(); prof = pr }) { ti = it; store.theme = it } } } }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -394,11 +405,12 @@ fun Sidebar(tab: Int, expanded: Boolean, onToggle: () -> Unit, onTab: (Int) -> U
 }
 
 @Composable
-fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, pls: List<String>, onAdd: () -> Unit, onRemove: (String) -> Unit, onRefresh: () -> Unit, onChange: () -> Unit, onAddUrl: (String) -> Unit) {
+fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> Unit, pls: List<String>, onAdd: () -> Unit, onRemove: (String) -> Unit, onRefresh: () -> Unit, onChange: () -> Unit, onAddUrl: (String) -> Unit) {
     val ctx = LocalContext.current
     var city by remember { mutableStateOf(store.city) }
     var auto by remember { mutableStateOf(store.auto) }
     var buf by remember { mutableStateOf(store.buffer) }
+    var kidsOn by remember { mutableStateOf(store.kids) }
     var msg by remember { mutableStateOf("") }
     val clip = LocalClipboardManager.current
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -453,6 +465,18 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, pls: List<String>, o
                     if (e.url in pls) Text("✓ Added", color = Color.LightGray)
                     else Button(onClick = { onAddUrl(e.url) }) { Text("Add") }
                 }
+            }
+        }
+        item { Text("Profile (each has its own favorites, theme and PIN)", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("Profile 1", "Profile 2", "Profile 3", "Kids").forEachIndexed { i, n -> FilterChip(store.profile == i, { onProfile(i) }, { Text(n) }) }
+            }
+        }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Kids mode (only kids, family and cartoon channels). Set a PIN so it stays on.", Modifier.weight(1f))
+                Switch(kidsOn, { kidsOn = it; store.kids = it; onChange() })
             }
         }
         item { Text("Streaming buffer", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
@@ -531,7 +555,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 0.7", color = Color.LightGray)
+        Text("Version 0.8", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -540,12 +564,13 @@ fun About() {
 }
 
 @Composable
-fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
+fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var channelsRaw by remember { mutableStateOf(listOf<Channel>()) }
     var hiddenCh by remember { mutableStateOf(store.hiddenCh) }
-    val channels = remember(channelsRaw, hiddenCh) { channelsRaw.filter { it.url !in hiddenCh } }
+    var kids by remember { mutableStateOf(store.kids) }
+    val channels = remember(channelsRaw, hiddenCh, kids) { channelsRaw.filter { it.url !in hiddenCh && (!kids || kidsWords.containsMatchIn(it.group)) } }
     var apps by remember { mutableStateOf(listOf<AppItem>()) }
     var favs by remember { mutableStateOf(store.favs) }
     var pls by remember { mutableStateOf(store.playlists) }
@@ -572,7 +597,7 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
     var weather by remember { mutableStateOf("") }
     val visibleApps = remember(apps, hidden) { apps.filter { it.pkg !in hidden } }
     fun hide(pkg: String) { hidden = hidden + pkg; store.hidden = hidden }
-    val onChange: () -> Unit = { hidden = store.hidden; wall = store.wall; city = store.city; hiddenCh = store.hiddenCh; favs = store.favs; if (store.playlists != pls) { pls = store.playlists; reload() } }
+    val onChange: () -> Unit = { hidden = store.hidden; wall = store.wall; city = store.city; hiddenCh = store.hiddenCh; kids = store.kids; favs = store.favs; if (store.playlists != pls) { pls = store.playlists; reload() } }
     var status by remember { mutableStateOf("") }
     fun checkLinks(list: List<Channel>) {
         scope.launch {
@@ -588,6 +613,8 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
             status = "Done: hid ${dead.size} dead channels out of ${l.size} checked"
         }
     }
+    LaunchedEffect(Unit) { while (true) { delay(30 * 60_000L); reload() } }
+    LaunchedEffect(Unit) { while (true) { delay(5000); if (playing == null && System.currentTimeMillis() - lastTouch > 120_000) ambient = true } }
     LaunchedEffect(city) { weather = if (city.isBlank()) "" else fetchWeather(city) }
     LaunchedEffect(Unit) {
         apps = withContext(Dispatchers.Default) { loadApps(ctx) }
@@ -595,6 +622,13 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
         if (store.auto) store.recents.firstOrNull()?.let { u -> channelsRaw.firstOrNull { it.url == u }?.let { playing = it } }
     }
     val cs = MaterialTheme.colorScheme
+    var q by remember { mutableStateOf("") }
+    var recent by remember { mutableStateOf(store.searches) }
+    val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { q = it; tab = 3 }
+    }
+    var lastTouch by remember { mutableStateOf(System.currentTimeMillis()) }
+    var ambient by remember { mutableStateOf(false) }
     val localPick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching { ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -603,7 +637,9 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
     }
 
     CompositionLocalProvider(LocalHide provides { c -> hiddenCh = hiddenCh + c.url; store.hiddenCh = hiddenCh }) {
-    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(themes[ti].glow), cs.background)))) {
+    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(themes[ti].glow), cs.background))).pointerInput(Unit) {
+        awaitPointerEventScope { while (true) { awaitPointerEvent(PointerEventPass.Initial); lastTouch = System.currentTimeMillis() } }
+    }) {
         if (wall.isNotEmpty()) {
             AsyncImage(wall, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             Box(Modifier.fillMaxSize().background(Color(0xAA000000)))
@@ -661,23 +697,31 @@ fun App(store: Store, ti: Int, onTheme: (Int) -> Unit) {
                     }
                     2 -> LazyVerticalGrid(GridCells.Adaptive(110.dp)) { items(visibleApps) { AppTile(it) { hide(it.pkg) } } }
                     3 -> Column {
-                        var q by remember { mutableStateOf("") }
-                        OutlinedTextField(q, { q = it }, singleLine = true, label = { Text("Search channels and apps") }, modifier = Modifier.fillMaxWidth())
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(q, { q = it }, singleLine = true, label = { Text("Search channels and apps") }, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { runCatching { voice.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)) } }) { Text("🎤") }
+                        }
+                        if (q.isBlank() && recent.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                            items(recent) { r -> FilterChip(false, { q = r }, { Text(r) }) }
+                        }
                         if (q.isNotBlank()) {
                             val ar = visibleApps.filter { it.label.contains(q, true) }
                             if (ar.isNotEmpty()) Shelf("Apps") { items(ar) { AppTile(it) { hide(it.pkg) } } }
                             val cr = remember(q, channels) { channels.filter { it.name.contains(q, true) }.take(80) }
                             LazyVerticalGrid(GridCells.Adaptive(250.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                                items(cr) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } }
+                                items(cr) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { if (q.isNotBlank()) { recent = (listOf(q.trim()) + recent).distinct().take(8); store.searches = recent }; playing = c } }
                             }
                         }
                     }
-                    4 -> Settings(store, ti, onTheme, pls, { showAdd = true },
+                    4 -> Settings(store, ti, onTheme, onProfile, pls, { showAdd = true },
                         { u -> pls = pls - u; store.playlists = pls; reload() }, { reload() }, onChange, { u -> pls = pls + u; store.playlists = pls; reload() })
                     else -> About()
                 }
             }
             Sidebar(tab, expanded, { expanded = !expanded }) { tab = it }
+        }
+        if (ambient && playing == null) Box(Modifier.fillMaxSize().background(Color.Black).clickable { ambient = false; lastTouch = System.currentTimeMillis() }, contentAlignment = Alignment.Center) {
+            Text(time, fontSize = 72.sp, fontWeight = FontWeight.Light)
         }
         playing?.let { p ->
             PlayerScreen(channels, p, onBack = { playing = null }) { c ->
@@ -717,6 +761,9 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
     var leftSide by remember { mutableStateOf(true) }
     var acc by remember { mutableStateOf(0f) }
     var locked by remember { mutableStateOf(false) }
+    var endTick by remember { mutableStateOf(0) }
+    var numDlg by remember { mutableStateOf(false) }
+    var numTxt by remember { mutableStateOf("") }
     var boost by remember { mutableStateOf(0) }
     var enh by remember { mutableStateOf<LoudnessEnhancer?>(null) }
     val hist = remember { mutableStateListOf<Channel>() }
@@ -725,6 +772,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
     val exo = remember {
         ExoPlayer.Builder(ctx, DefaultRenderersFactory(ctx).setEnableDecoderFallback(true)).setLoadControl(bufferControl(sp.getInt("buf", 1))).build().also { p ->
             p.addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) endTick++ }
                 override fun onPlayerError(error: PlaybackException) {
                     Handler(Looper.getMainLooper()).postDelayed({ p.prepare() }, 3000)
                 }
@@ -786,9 +834,11 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
     }
     fun setAspect(i: Int) { mi = i; sp.edit().putInt("aspect", i).apply(); toast = "Aspect: ${names[i]}" }
     fun step(d: Int) {
-        val i = list.indexOfFirst { it.url == cur.url }
-        if (i >= 0 && list.isNotEmpty()) cur = list[(i + d + list.size) % list.size]
+        val pool = if (isVod(cur)) list.filter { it.group == cur.group } else list
+        val i = pool.indexOfFirst { it.url == cur.url }
+        if (i >= 0 && pool.isNotEmpty()) cur = pool[(i + d + pool.size) % pool.size]
     }
+    LaunchedEffect(endTick) { if (endTick > 0 && isVod(cur)) step(1) }
     BackHandler { if (panel) panel = false else onBack() }
     Box(
         Modifier.fillMaxSize().background(Color.Black).pointerInput(Unit) {
@@ -861,6 +911,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
                 TextButton(onClick = { panel = !panel }) { Text("☰ Channels") }
                 TextButton(onClick = { step(-1) }) { Text("◀") }
                 TextButton(onClick = { step(1) }) { Text("▶") }
+                TextButton(onClick = { numDlg = true }) { Text("#") }
                 TextButton(onClick = { applyBoost((boost + 1) % 4) }) { Text(if (boost == 0) "Boost" else "+${boost * 3}dB") }
                 TextButton(onClick = { if (hist.size >= 2) cur = hist[hist.size - 2] }) { Text("⇄") }
                 TextButton(onClick = { subPick.launch(arrayOf("*/*")) }) { Text("CC+") }
@@ -876,6 +927,17 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
                 names.forEachIndexed { i, n -> FilterChip(mi == i, { setAspect(i) }, { Text(n) }) }
             }
         }
+        if (numDlg) AlertDialog(
+            onDismissRequest = { numDlg = false },
+            title = { Text("Go to channel number") },
+            text = { OutlinedTextField(numTxt, { numTxt = it.filter { ch -> ch.isDigit() }.take(5) }, singleLine = true, label = { Text("1 to ${list.size}") }) },
+            confirmButton = {
+                TextButton(onClick = {
+                    numTxt.toIntOrNull()?.let { n -> if (n in 1..list.size) cur = list[n - 1] }
+                    numTxt = ""; numDlg = false
+                }) { Text("Go") }
+            }
+        )
         if (locked) Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onLongPress = { locked = false; toast = "Unlocked" }) })
         if (toast.isNotEmpty()) Text(
             toast, Modifier.align(Alignment.Center).clip(RoundedCornerShape(12.dp)).background(Color(0xCC000000)).padding(horizontal = 20.dp, vertical = 10.dp),
