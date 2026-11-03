@@ -1,6 +1,10 @@
 package com.bensal.tvlauncher
 
 import android.app.Activity
+import android.util.Xml
+import org.xmlpull.v1.XmlPullParser
+import java.io.InputStream
+import java.util.zip.GZIPInputStream
 import android.speech.RecognizerIntent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import android.media.audiofx.LoudnessEnhancer
@@ -88,7 +92,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-data class Channel(val name: String, val url: String, val group: String, val logo: String?)
+data class Channel(val name: String, val url: String, val group: String, val logo: String?, val tvgId: String? = null)
 data class AppItem(val label: String, val pkg: String, val icon: ImageBitmap, val intent: Intent, val isGame: Boolean)
 data class Lib(val section: String, val name: String, val url: String)
 const val IPTV = "https://iptv-org.github.io/iptv/"
@@ -122,7 +126,58 @@ val library = listOf(
     Lib("Countries", "Qatar", IPTV + "countries/qa.m3u"),
     Lib("Countries", "Saudi Arabia", IPTV + "countries/sa.m3u"),
     Lib("Countries", "United Kingdom", IPTV + "countries/uk.m3u"),
-    Lib("Countries", "United States", IPTV + "countries/us.m3u")
+    Lib("Countries", "United States", IPTV + "countries/us.m3u"),
+    Lib("Countries", "Pakistan", IPTV + "countries/pk.m3u"),
+    Lib("Countries", "Bangladesh", IPTV + "countries/bd.m3u"),
+    Lib("Countries", "Sri Lanka", IPTV + "countries/lk.m3u"),
+    Lib("Countries", "Nepal", IPTV + "countries/np.m3u"),
+    Lib("Countries", "Singapore", IPTV + "countries/sg.m3u"),
+    Lib("Countries", "Malaysia", IPTV + "countries/my.m3u"),
+    Lib("Countries", "Indonesia", IPTV + "countries/id.m3u"),
+    Lib("Countries", "Philippines", IPTV + "countries/ph.m3u"),
+    Lib("Countries", "Australia", IPTV + "countries/au.m3u"),
+    Lib("Countries", "Canada", IPTV + "countries/ca.m3u"),
+    Lib("Countries", "Germany", IPTV + "countries/de.m3u"),
+    Lib("Countries", "France", IPTV + "countries/fr.m3u"),
+    Lib("Countries", "Spain", IPTV + "countries/es.m3u"),
+    Lib("Countries", "Italy", IPTV + "countries/it.m3u"),
+    Lib("Countries", "Turkey", IPTV + "countries/tr.m3u"),
+    Lib("Countries", "Russia", IPTV + "countries/ru.m3u"),
+    Lib("Countries", "Japan", IPTV + "countries/jp.m3u"),
+    Lib("Countries", "South Korea", IPTV + "countries/kr.m3u"),
+    Lib("Countries", "South Africa", IPTV + "countries/za.m3u"),
+    Lib("Countries", "Nigeria", IPTV + "countries/ng.m3u"),
+    Lib("Countries", "Kenya", IPTV + "countries/ke.m3u"),
+    Lib("Countries", "Egypt", IPTV + "countries/eg.m3u"),
+    Lib("Countries", "Kuwait", IPTV + "countries/kw.m3u"),
+    Lib("Countries", "Oman", IPTV + "countries/om.m3u"),
+    Lib("Countries", "Bahrain", IPTV + "countries/bh.m3u"),
+    Lib("Languages", "Bengali", IPTV + "languages/ben.m3u"),
+    Lib("Languages", "Urdu", IPTV + "languages/urd.m3u"),
+    Lib("Languages", "Marathi", IPTV + "languages/mar.m3u"),
+    Lib("Languages", "Punjabi", IPTV + "languages/pan.m3u"),
+    Lib("Languages", "Gujarati", IPTV + "languages/guj.m3u"),
+    Lib("Languages", "Spanish", IPTV + "languages/spa.m3u"),
+    Lib("Languages", "French", IPTV + "languages/fra.m3u"),
+    Lib("Languages", "German", IPTV + "languages/deu.m3u"),
+    Lib("Languages", "Portuguese", IPTV + "languages/por.m3u"),
+    Lib("Languages", "Russian", IPTV + "languages/rus.m3u"),
+    Lib("Languages", "Turkish", IPTV + "languages/tur.m3u"),
+    Lib("Languages", "Indonesian", IPTV + "languages/ind.m3u"),
+    Lib("Languages", "Chinese", IPTV + "languages/zho.m3u"),
+    Lib("Languages", "Japanese", IPTV + "languages/jpn.m3u"),
+    Lib("Languages", "Korean", IPTV + "languages/kor.m3u"),
+    Lib("Categories", "General", IPTV + "categories/general.m3u"),
+    Lib("Categories", "Religious", IPTV + "categories/religious.m3u"),
+    Lib("Categories", "Education", IPTV + "categories/education.m3u"),
+    Lib("Categories", "Science", IPTV + "categories/science.m3u"),
+    Lib("Categories", "Business", IPTV + "categories/business.m3u"),
+    Lib("Categories", "Weather", IPTV + "categories/weather.m3u"),
+    Lib("Categories", "Outdoor", IPTV + "categories/outdoor.m3u"),
+    Lib("Categories", "Relax", IPTV + "categories/relax.m3u"),
+    Lib("Everything (huge, slow)", "All channels by country", IPTV + "index.country.m3u"),
+    Lib("Everything (huge, slow)", "All channels by category", IPTV + "index.category.m3u"),
+    Lib("Everything (huge, slow)", "All channels by language", IPTV + "index.language.m3u")
 )
 data class PTheme(val name: String, val bg: Long, val surface: Long, val accent: Long, val glow: Long)
 
@@ -134,6 +189,56 @@ val themes = listOf(
     PTheme("Ocean", 0xFF06121C, 0xFF0D2233, 0xFF2EA8FF, 0xFF0B3A57),
     PTheme("Forest", 0xFF07130D, 0xFF0F2318, 0xFF3DDC84, 0xFF123B26)
 )
+
+data class Prog(val start: Long, val stop: Long, val title: String)
+object Epg {
+    var data: Map<String, List<Prog>> = emptyMap()
+    var hint: String? = null
+}
+var epgTick by mutableStateOf(0)
+val HM = SimpleDateFormat("HH:mm", Locale.getDefault())
+
+fun nowNext(c: Channel): Pair<Prog?, Prog?> {
+    val l = c.tvgId?.let { Epg.data[it] } ?: return null to null
+    val t = System.currentTimeMillis()
+    val i = l.indexOfFirst { it.stop > t }
+    if (i < 0) return null to null
+    val p = l[i]
+    return if (p.start <= t) p to l.getOrNull(i + 1) else null to p
+}
+
+suspend fun loadEpg(u: String) = withContext(Dispatchers.IO) {
+    runCatching {
+        val c = URL(u).openConnection() as HttpURLConnection
+        c.connectTimeout = 15000; c.readTimeout = 60000
+        var ins: InputStream = c.inputStream
+        if (u.substringBefore('?').endsWith(".gz")) ins = GZIPInputStream(ins)
+        val parser = Xml.newPullParser()
+        parser.setInput(ins, null)
+        val fmt = SimpleDateFormat("yyyyMMddHHmmss Z", Locale.US)
+        val now = System.currentTimeMillis(); val limit = now + 24 * 3600_000L
+        val map = HashMap<String, MutableList<Prog>>()
+        var ch: String? = null; var st = 0L; var en = 0L; var title = ""
+        var ev = parser.eventType
+        while (ev != XmlPullParser.END_DOCUMENT) {
+            if (ev == XmlPullParser.START_TAG) {
+                if (parser.name == "programme") {
+                    ch = parser.getAttributeValue(null, "channel")
+                    st = runCatching { fmt.parse(parser.getAttributeValue(null, "start"))!!.time }.getOrDefault(0L)
+                    en = runCatching { fmt.parse(parser.getAttributeValue(null, "stop"))!!.time }.getOrDefault(0L)
+                    title = ""
+                } else if (parser.name == "title" && title.isEmpty()) {
+                    title = parser.nextText()
+                }
+            } else if (ev == XmlPullParser.END_TAG && parser.name == "programme") {
+                if (ch != null && en > now && st < limit && title.isNotEmpty()) map.getOrPut(ch) { mutableListOf() }.add(Prog(st, en, title))
+            }
+            ev = parser.next()
+        }
+        map.values.forEach { it.sortBy { p -> p.start } }
+        Epg.data = map
+    }
+}
 
 fun bufferControl(level: Int) = when (level) {
     0 -> DefaultLoadControl.Builder().setBufferDurationsMs(5_000, 15_000, 1_000, 2_000).build()
@@ -161,25 +266,31 @@ fun isVod(c: Channel): Boolean {
 
 fun parseM3u(text: String): List<Channel> {
     val out = mutableListOf<Channel>()
-    var name = ""; var group = "Other"; var logo: String? = null
+    var name = ""; var group = "Other"; var logo: String? = null; var tvg: String? = null
     val attr = Regex("([\\w-]+)=\"([^\"]*)\"")
     for (raw in text.lineSequence()) {
         val l = raw.trim()
+        if (l.startsWith("#EXTM3U")) {
+            val h = attr.findAll(l).associate { it.groupValues[1] to it.groupValues[2] }
+            (h["url-tvg"] ?: h["x-tvg-url"])?.split(",")?.firstOrNull()?.trim()?.takeIf { it.startsWith("http") }?.let { Epg.hint = it }
+        }
         if (l.startsWith("#EXTINF")) {
             val a = attr.findAll(l).associate { it.groupValues[1] to it.groupValues[2] }
             group = a["group-title"].takeUnless { it.isNullOrBlank() } ?: "Other"
             logo = a["tvg-logo"]?.takeIf { it.isNotBlank() }
+            tvg = a["tvg-id"]?.takeIf { it.isNotBlank() }
             name = l.substringAfterLast(",").trim()
         } else if (l.isNotEmpty() && !l.startsWith("#")) {
-            out += Channel(name.ifBlank { l }, l, group, logo)
-            name = ""; group = "Other"; logo = null
+            out += Channel(name.ifBlank { l }, l, group, logo, tvg)
+            name = ""; group = "Other"; logo = null; tvg = null
         }
     }
     return out
 }
 
 object AppCtx { lateinit var ctx: Context }
-val LocalHide = compositionLocalOf<(Channel) -> Unit> { { _ -> } }
+val noHide: (Channel) -> Unit = {}
+val LocalHide = compositionLocalOf { noHide }
 
 suspend fun fetch(u: String): List<Channel> = withContext(Dispatchers.IO) {
     runCatching {
@@ -253,6 +364,12 @@ class Store(ctx: Context, val profile: Int = 0) {
     var searches: List<String>
         get() = p.getString("srch", "")!!.split("\n").filter { it.isNotBlank() }
         set(v) { p.edit().putString("srch", v.joinToString("\n")).apply() }
+    var epgUrl: String
+        get() = p.getString("epg", "")!!
+        set(v) { p.edit().putString("epg", v).apply() }
+    var folders: Map<String, String>
+        get() = p.getString("fold", "")!!.lines().filter { it.contains("=") }.associate { it.substringBefore("=") to it.substringAfter("=") }
+        set(v) { p.edit().putString("fold", v.entries.joinToString("\n") { it.key + "=" + it.value }).apply() }
     var wall: String
         get() = p.getString("wall", "")!!
         set(v) { p.edit().putString("wall", v).apply() }
@@ -318,7 +435,7 @@ fun TvCard(c: Channel, fav: Boolean, onFav: () -> Unit, onClick: () -> Unit) {
         AsyncImage(c.logo, null, Modifier.align(Alignment.Center).size(72.dp))
         Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color(0x99000000)).padding(8.dp)) {
             Text(c.name, maxLines = 1, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            Text(c.group, maxLines = 1, fontSize = 11.sp, color = Color.LightGray)
+            Text((if (epgTick >= 0) nowNext(c).first?.title else null) ?: c.group, maxLines = 1, fontSize = 11.sp, color = Color.LightGray)
         }
         Text(if (fav) "★" else "☆", Modifier.align(Alignment.TopEnd).clickable { onFav() }.padding(8.dp), fontSize = 20.sp)
     }
@@ -410,7 +527,9 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
     var city by remember { mutableStateOf(store.city) }
     var auto by remember { mutableStateOf(store.auto) }
     var buf by remember { mutableStateOf(store.buffer) }
+    var libSec by remember { mutableStateOf("Popular") }
     var kidsOn by remember { mutableStateOf(store.kids) }
+    var epgText by remember { mutableStateOf(store.epgUrl) }
     var msg by remember { mutableStateOf("") }
     val clip = LocalClipboardManager.current
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -457,26 +576,23 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
         }
         item { Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(onClick = onAdd) { Text("Add M3U link") }; OutlinedButton(onClick = onRefresh) { Text("Refresh") }; OutlinedButton(onClick = { importPick.launch(arrayOf("*/*")) }) { Text("Import M3U file") } } }
         item { Text("Playlist library", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
-        library.groupBy { it.section }.forEach { (sec, l) ->
-            item { Text(sec, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold) }
-            items(l) { e ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(e.name, Modifier.weight(1f))
-                    if (e.url in pls) Text("✓ Added", color = Color.LightGray)
-                    else Button(onClick = { onAddUrl(e.url) }) { Text("Add") }
-                }
+        item {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(library.map { it.section }.distinct()) { sec -> FilterChip(libSec == sec, { libSec = sec }, { Text(sec) }) }
             }
         }
-        item { Text("Profile (each has its own favorites, theme and PIN)", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("Profile 1", "Profile 2", "Profile 3", "Kids").forEachIndexed { i, n -> FilterChip(store.profile == i, { onProfile(i) }, { Text(n) }) }
-            }
-        }
-        item {
+        items(library.filter { it.section == libSec }) { e ->
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Kids mode (only kids, family and cartoon channels). Set a PIN so it stays on.", Modifier.weight(1f))
-                Switch(kidsOn, { kidsOn = it; store.kids = it; onChange() })
+                Text(e.name, Modifier.weight(1f))
+                if (e.url in pls) Text("✓ Added", color = Color.LightGray)
+                else Button(onClick = { onAddUrl(e.url) }) { Text("Add") }
+            }
+        }
+        item { Text("Program guide (XMLTV link)", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(epgText, { epgText = it }, singleLine = true, label = { Text("Guide URL (.xml or .xml.gz)") })
+                Button(onClick = { store.epgUrl = epgText.trim(); onChange() }) { Text("Load guide") }
             }
         }
         item { Text("Streaming buffer", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
@@ -555,7 +671,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 0.8", color = Color.LightGray)
+        Text("Version 1.0", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -570,6 +686,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
     var channelsRaw by remember { mutableStateOf(listOf<Channel>()) }
     var hiddenCh by remember { mutableStateOf(store.hiddenCh) }
     var kids by remember { mutableStateOf(store.kids) }
+    var epgUrl by remember { mutableStateOf(store.epgUrl) }
     val channels = remember(channelsRaw, hiddenCh, kids) { channelsRaw.filter { it.url !in hiddenCh && (!kids || kidsWords.containsMatchIn(it.group)) } }
     var apps by remember { mutableStateOf(listOf<AppItem>()) }
     var favs by remember { mutableStateOf(store.favs) }
@@ -592,12 +709,17 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
         store.favs = favs
     }
     var hidden by remember { mutableStateOf(store.hidden) }
+    var folders by remember { mutableStateOf(store.folders) }
+    var menuApp by remember { mutableStateOf<AppItem?>(null) }
+    var folderText by remember { mutableStateOf("") }
+    var folderSel by remember { mutableStateOf<String?>(null) }
+    var panel by remember { mutableStateOf(false) }
     var wall by remember { mutableStateOf(store.wall) }
     var city by remember { mutableStateOf(store.city) }
     var weather by remember { mutableStateOf("") }
     val visibleApps = remember(apps, hidden) { apps.filter { it.pkg !in hidden } }
     fun hide(pkg: String) { hidden = hidden + pkg; store.hidden = hidden }
-    val onChange: () -> Unit = { hidden = store.hidden; wall = store.wall; city = store.city; hiddenCh = store.hiddenCh; kids = store.kids; favs = store.favs; if (store.playlists != pls) { pls = store.playlists; reload() } }
+    val onChange: () -> Unit = { hidden = store.hidden; wall = store.wall; city = store.city; hiddenCh = store.hiddenCh; kids = store.kids; epgUrl = store.epgUrl; favs = store.favs; if (store.playlists != pls) { pls = store.playlists; reload() } }
     var status by remember { mutableStateOf("") }
     fun checkLinks(list: List<Channel>) {
         scope.launch {
@@ -615,6 +737,10 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
     }
     LaunchedEffect(Unit) { while (true) { delay(30 * 60_000L); reload() } }
     LaunchedEffect(Unit) { while (true) { delay(5000); if (playing == null && System.currentTimeMillis() - lastTouch > 120_000) ambient = true } }
+    LaunchedEffect(epgUrl, channelsRaw.size) {
+        val u = epgUrl.ifBlank { Epg.hint ?: "" }
+        if (u.isNotBlank()) { loadEpg(u); epgTick++ }
+    }
     LaunchedEffect(city) { weather = if (city.isBlank()) "" else fetchWeather(city) }
     LaunchedEffect(Unit) {
         apps = withContext(Dispatchers.Default) { loadApps(ctx) }
@@ -654,7 +780,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                         val byGroup = remember(channels) { channels.groupBy { it.group }.toSortedMap() }
                         val fl = remember(channels, favs) { channels.filter { it.url in favs } }
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                            item { Row(verticalAlignment = Alignment.CenterVertically) { Text(time, fontSize = 36.sp, fontWeight = FontWeight.Light); if (weather.isNotEmpty()) { Spacer(Modifier.width(24.dp)); Text("🌤 $weather", fontSize = 22.sp) } } }
+                            item { Row(verticalAlignment = Alignment.CenterVertically) { Text(time, fontSize = 36.sp, fontWeight = FontWeight.Light); if (weather.isNotEmpty()) { Spacer(Modifier.width(24.dp)); Text("🌤 $weather", fontSize = 22.sp) }; Spacer(Modifier.width(24.dp)); TextButton(onClick = { panel = true }) { Text("⚡ Quick panel") } } }
                             item { Hero(hero, hero != null && hero.url in favs, { hero?.let { playing = it } }, { hero?.let { toggleFav(it) } }) }
                             if (recentCh.isNotEmpty()) item {
                                 Shelf("Continue Watching") { items(recentCh) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } }
@@ -663,8 +789,11 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                                 Shelf("Favorites") { items(fl) { c -> TvCard(c, true, { toggleFav(c) }) { playing = c } } }
                             }
                             val games = visibleApps.filter { it.isGame }
-                            if (games.isNotEmpty()) item { Shelf("Games") { items(games) { AppTile(it) { hide(it.pkg) } } } }
-                            item { Shelf("Apps") { items(visibleApps) { AppTile(it) { hide(it.pkg) } } } }
+                            if (games.isNotEmpty()) item { Shelf("Games") { items(games) { AppTile(it) { menuApp = it } } } }
+                            item { Shelf("Apps") { items(visibleApps) { AppTile(it) { menuApp = it } } } }
+                            folders.values.distinct().sorted().forEach { fn ->
+                                item { Shelf("📁 " + fn) { items(visibleApps.filter { folders[it.pkg] == fn }) { AppTile(it) { menuApp = it } } } }
+                            }
                             byGroup.entries.take(15).forEach { (g, glist) ->
                                 item { Shelf(g) { items(glist.take(30)) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
                             }
@@ -674,6 +803,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                         var g by remember { mutableStateOf<String?>(null) }
                         var vod by remember { mutableStateOf(false) }
                         var az by remember { mutableStateOf(false) }
+                        var guide by remember { mutableStateOf(false) }
                         val base = remember(channels, vod, az) { channels.filter { isVod(it) == vod }.let { l -> if (az) l.sortedBy { it.name.lowercase() } else l } }
                         val groups = remember(base) { base.map { it.group }.distinct().sorted() }
                         val shown = remember(base, g) { base.filter { g == null || it.group == g } }
@@ -683,6 +813,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                             FilterChip(az, { az = !az }, { Text("A–Z") })
                             FilterChip(false, { localPick.launch(arrayOf("video/*", "audio/*")) }, { Text("📁 Local video") })
                             FilterChip(false, { checkLinks(shown) }, { Text("🧹 Check links") })
+                            FilterChip(guide, { guide = !guide }, { Text("📋 Guide") })
                         }
                         if (status.isNotEmpty()) Text(status, fontSize = 12.sp, color = Color.LightGray)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
@@ -691,11 +822,35 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                         }
                         if (loading) Text("Loading channels…")
                         else if (channels.isEmpty()) Text("No channels yet. Add an M3U link in Settings.")
-                        LazyVerticalGrid(GridCells.Adaptive(250.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        if (guide) {
+                            val tick = epgTick
+                            if (tick >= 0 && Epg.data.isEmpty()) Text("No guide data yet. Add an XMLTV guide link in Settings, or use a playlist that includes one.", color = Color.LightGray)
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                items(shown.take(300)) { c ->
+                                    val (n, x) = nowNext(c)
+                                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { playing = c }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(c.name, Modifier.width(220.dp), maxLines = 1, fontWeight = FontWeight.Bold)
+                                        Column {
+                                            Text(n?.let { "${HM.format(Date(it.start))}-${HM.format(Date(it.stop))}  ${it.title}" } ?: "No guide data", maxLines = 1)
+                                            if (x != null) Text("Next ${HM.format(Date(x.start))}  ${x.title}", maxLines = 1, fontSize = 12.sp, color = Color.LightGray)
+                                        }
+                                    }
+                                }
+                            }
+                        } else LazyVerticalGrid(GridCells.Adaptive(250.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                             items(shown) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } }
                         }
                     }
-                    2 -> LazyVerticalGrid(GridCells.Adaptive(110.dp)) { items(visibleApps) { AppTile(it) { hide(it.pkg) } } }
+                    2 -> Column {
+                        val fnames = remember(folders) { folders.values.distinct().sorted() }
+                        if (fnames.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
+                            item { FilterChip(folderSel == null, { folderSel = null }, { Text("All") }) }
+                            items(fnames) { n -> FilterChip(folderSel == n, { folderSel = n }, { Text("📁 " + n) }) }
+                        }
+                        LazyVerticalGrid(GridCells.Adaptive(110.dp)) {
+                            items(visibleApps.filter { folderSel == null || folders[it.pkg] == folderSel }) { AppTile(it) { menuApp = it } }
+                        }
+                    }
                     3 -> Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             OutlinedTextField(q, { q = it }, singleLine = true, label = { Text("Search channels and apps") }, modifier = Modifier.weight(1f))
@@ -706,7 +861,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                         }
                         if (q.isNotBlank()) {
                             val ar = visibleApps.filter { it.label.contains(q, true) }
-                            if (ar.isNotEmpty()) Shelf("Apps") { items(ar) { AppTile(it) { hide(it.pkg) } } }
+                            if (ar.isNotEmpty()) Shelf("Apps") { items(ar) { AppTile(it) { menuApp = it } } }
                             val cr = remember(q, channels) { channels.filter { it.name.contains(q, true) }.take(80) }
                             LazyVerticalGrid(GridCells.Adaptive(250.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                                 items(cr) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { if (q.isNotBlank()) { recent = (listOf(q.trim()) + recent).distinct().take(8); store.searches = recent }; playing = c } }
@@ -729,6 +884,49 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
             }
         }
     }
+    }
+    menuApp?.let { a ->
+        AlertDialog(
+            onDismissRequest = { menuApp = null },
+            title = { Text(a.label) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(folderText, { folderText = it }, singleLine = true, label = { Text("Folder name") })
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            if (folderText.isNotBlank()) { folders = folders + (a.pkg to folderText.trim()); store.folders = folders }
+                            menuApp = null; folderText = ""
+                        }) { Text("Add to folder") }
+                        if (a.pkg in folders) OutlinedButton(onClick = { folders = folders - a.pkg; store.folders = folders; menuApp = null }) { Text("Remove") }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { hide(a.pkg); menuApp = null }) { Text("Hide app") } },
+            dismissButton = { TextButton(onClick = { menuApp = null }) { Text("Cancel") } }
+        )
+    }
+    if (panel) {
+        val am = remember { ctx.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager }
+        val mx = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+        var vol by remember { mutableStateOf(am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat()) }
+        var bri by remember { mutableStateOf(0.5f) }
+        AlertDialog(
+            onDismissRequest = { panel = false },
+            title = { Text("Quick panel") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Volume")
+                    Slider(vol, { vol = it; am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, it.toInt(), 0) }, valueRange = 0f..mx.toFloat())
+                    Text("Brightness")
+                    Slider(bri, { v -> bri = v; val w = (ctx as Activity).window; w.attributes = w.attributes.also { a -> a.screenBrightness = v.coerceAtLeast(0.02f) } })
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        themes.forEachIndexed { i, th -> Box(Modifier.size(36.dp).clip(CircleShape).background(Color(th.accent)).clickable { onTheme(i) }) }
+                    }
+                    Button(onClick = { panel = false; ambient = true }) { Text("Screensaver now") }
+                }
+            },
+            confirmButton = { TextButton(onClick = { panel = false }) { Text("Close") } }
+        )
     }
     if (showAdd) {
         var t by remember { mutableStateOf("") }
@@ -906,6 +1104,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
             Column(Modifier.align(Alignment.TopStart).padding(16.dp)) {
                 Text(cur.name, fontWeight = FontWeight.Bold, color = Color.White, fontSize = 18.sp)
                 if (info.isNotEmpty()) Text(info, color = Color.LightGray, fontSize = 12.sp)
+                if (epgTick >= 0) nowNext(cur).let { (n, x) -> if (n != null) Text("Now: ${n.title}" + (x?.let { "  •  Next: ${it.title}" } ?: ""), color = Color.LightGray, fontSize = 12.sp) }
             }
             Row(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
                 TextButton(onClick = { panel = !panel }) { Text("☰ Channels") }
