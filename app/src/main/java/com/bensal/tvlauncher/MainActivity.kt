@@ -258,6 +258,12 @@ suspend fun alive(u: String): Boolean = withContext(Dispatchers.IO) {
 }
 
 val kidsWords = Regex("(?i)kid|child|cartoon|animation|family|junior|baby|toon")
+val qRegex = Regex("(?i)(\\d{3,4})p|\\b4k\\b|\\buhd\\b|\\b2160\\b")
+fun quality(c: Channel): Int {
+    val m = qRegex.find(c.name) ?: return 0
+    val g = m.groupValues[1]
+    return if (g.isNotEmpty()) g.toInt() else 2160
+}
 val vodWords = Regex("(?i)movie|series|drama|show|film|vod|cinema")
 fun isVod(c: Channel): Boolean {
     val u = c.url.substringBefore('?').lowercase()
@@ -370,6 +376,9 @@ class Store(ctx: Context, val profile: Int = 0) {
     var folders: Map<String, String>
         get() = p.getString("fold", "")!!.lines().filter { it.contains("=") }.associate { it.substringBefore("=") to it.substringAfter("=") }
         set(v) { p.edit().putString("fold", v.entries.joinToString("\n") { it.key + "=" + it.value }).apply() }
+    var minQ: Int
+        get() = p.getInt("minq", 0)
+        set(v) { p.edit().putInt("minq", v).apply() }
     var wall: String
         get() = p.getString("wall", "")!!
         set(v) { p.edit().putString("wall", v).apply() }
@@ -433,6 +442,8 @@ fun TvCard(c: Channel, fav: Boolean, onFav: () -> Unit, onClick: () -> Unit) {
             .onFocusChanged { f = it.isFocused }.combinedClickable(onLongClick = { hide(c) }, onClick = onClick)
     ) {
         AsyncImage(c.logo, null, Modifier.align(Alignment.Center).size(72.dp))
+        val q = quality(c)
+        if (q >= 720) Text(if (q >= 2160) "4K" else q.toString() + "p", Modifier.align(Alignment.TopStart).padding(6.dp).clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.primary).padding(horizontal = 6.dp, vertical = 2.dp), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.Black)
         Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color(0x99000000)).padding(8.dp)) {
             Text(c.name, maxLines = 1, fontWeight = FontWeight.Bold, fontSize = 14.sp)
             Text((if (epgTick >= 0) nowNext(c).first?.title else null) ?: c.group, maxLines = 1, fontSize = 11.sp, color = Color.LightGray)
@@ -547,6 +558,12 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
             onAddUrl(uri.toString())
         }
     }
+    fun clearPositions() {
+        val sp = ctx.getSharedPreferences("tv", Context.MODE_PRIVATE)
+        val e = sp.edit()
+        sp.all.keys.filter { it.startsWith("pos_") }.forEach { e.remove(it) }
+        e.apply()
+    }
     if (!ok) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Settings are locked", fontWeight = FontWeight.Bold, fontSize = 20.sp)
@@ -593,6 +610,19 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(epgText, { epgText = it }, singleLine = true, label = { Text("Guide URL (.xml or .xml.gz)") })
                 Button(onClick = { store.epgUrl = epgText.trim(); onChange() }) { Text("Load guide") }
+            }
+        }
+        item { Text("Privacy: clear history any time", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { store.recents = emptyList(); onChange(); msg = "Watch history cleared" }) { Text("Clear watch history") }
+                OutlinedButton(onClick = { store.searches = emptyList(); onChange(); msg = "Search history cleared" }) { Text("Clear search history") }
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { clearPositions(); msg = "Resume positions cleared" }) { Text("Clear resume positions") }
+                OutlinedButton(onClick = { store.recents = emptyList(); store.searches = emptyList(); clearPositions(); onChange(); msg = "All history cleared" }) { Text("Clear everything") }
             }
         }
         item { Text("Streaming buffer", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
@@ -671,7 +701,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 1.0", color = Color.LightGray)
+        Text("Version 1.1", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -686,12 +716,14 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
     var channelsRaw by remember { mutableStateOf(listOf<Channel>()) }
     var hiddenCh by remember { mutableStateOf(store.hiddenCh) }
     var kids by remember { mutableStateOf(store.kids) }
+    var minQ by remember { mutableStateOf(store.minQ) }
     var epgUrl by remember { mutableStateOf(store.epgUrl) }
-    val channels = remember(channelsRaw, hiddenCh, kids) { channelsRaw.filter { it.url !in hiddenCh && (!kids || kidsWords.containsMatchIn(it.group)) } }
+    val channels = remember(channelsRaw, hiddenCh, kids, minQ) { channelsRaw.filter { it.url !in hiddenCh && (!kids || kidsWords.containsMatchIn(it.group)) && (minQ == 0 || quality(it) >= minQ) } }
     var apps by remember { mutableStateOf(listOf<AppItem>()) }
     var favs by remember { mutableStateOf(store.favs) }
     var pls by remember { mutableStateOf(store.playlists) }
     var recents by remember { mutableStateOf(store.recents) }
+    var recent by remember { mutableStateOf(store.searches) }
     var playing by remember { mutableStateOf<Channel?>(null) }
     var tab by remember { mutableStateOf(0) }
     var expanded by remember { mutableStateOf(false) }
@@ -719,7 +751,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
     var weather by remember { mutableStateOf("") }
     val visibleApps = remember(apps, hidden) { apps.filter { it.pkg !in hidden } }
     fun hide(pkg: String) { hidden = hidden + pkg; store.hidden = hidden }
-    val onChange: () -> Unit = { hidden = store.hidden; wall = store.wall; city = store.city; hiddenCh = store.hiddenCh; kids = store.kids; epgUrl = store.epgUrl; favs = store.favs; if (store.playlists != pls) { pls = store.playlists; reload() } }
+    val onChange: () -> Unit = { hidden = store.hidden; wall = store.wall; city = store.city; hiddenCh = store.hiddenCh; kids = store.kids; minQ = store.minQ; recents = store.recents; recent = store.searches; epgUrl = store.epgUrl; favs = store.favs; if (store.playlists != pls) { pls = store.playlists; reload() } }
     var status by remember { mutableStateOf("") }
     fun checkLinks(list: List<Channel>) {
         scope.launch {
@@ -751,7 +783,6 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
     }
     val cs = MaterialTheme.colorScheme
     var q by remember { mutableStateOf("") }
-    var recent by remember { mutableStateOf(store.searches) }
     val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { q = it; tab = 3 }
     }
@@ -779,6 +810,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                         val hero = recentCh.firstOrNull() ?: channels.firstOrNull()
                         val byGroup = remember(channels) { channels.groupBy { it.group }.toSortedMap() }
                         val fl = remember(channels, favs) { channels.filter { it.url in favs } }
+                        val kidsList = remember(channels) { channels.filter { kidsWords.containsMatchIn(it.group) }.take(30) }
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                             item { Row(verticalAlignment = Alignment.CenterVertically) { Text(time, fontSize = 36.sp, fontWeight = FontWeight.Light); if (weather.isNotEmpty()) { Spacer(Modifier.width(24.dp)); Text("🌤 $weather", fontSize = 22.sp) }; Spacer(Modifier.width(24.dp)); TextButton(onClick = { panel = true }) { Text("⚡ Quick panel") } } }
                             item { Hero(hero, hero != null && hero.url in favs, { hero?.let { playing = it } }, { hero?.let { toggleFav(it) } }) }
@@ -788,6 +820,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                             if (fl.isNotEmpty()) item {
                                 Shelf("Favorites") { items(fl) { c -> TvCard(c, true, { toggleFav(c) }) { playing = c } } }
                             }
+                            if (kidsList.isNotEmpty() && !kids) item { Shelf("Kids & Family") { items(kidsList) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
                             val games = visibleApps.filter { it.isGame }
                             if (games.isNotEmpty()) item { Shelf("Games") { items(games) { AppTile(it) { menuApp = it } } } }
                             item { Shelf("Apps") { items(visibleApps) { AppTile(it) { menuApp = it } } } }
@@ -804,13 +837,14 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                         var vod by remember { mutableStateOf(false) }
                         var az by remember { mutableStateOf(false) }
                         var guide by remember { mutableStateOf(false) }
-                        val base = remember(channels, vod, az) { channels.filter { isVod(it) == vod }.let { l -> if (az) l.sortedBy { it.name.lowercase() } else l } }
+                        val base = remember(channels, vod, az, minQ) { channels.filter { isVod(it) == vod }.let { l -> if (az) l.sortedBy { it.name.lowercase() } else if (minQ > 0) l.sortedByDescending { quality(it) } else l } }
                         val groups = remember(base) { base.map { it.group }.distinct().sorted() }
                         val shown = remember(base, g) { base.filter { g == null || it.group == g } }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
                             FilterChip(!vod, { vod = false; g = null }, { Text("📺 Live TV") })
                             FilterChip(vod, { vod = true; g = null }, { Text("🎬 Movies & Series") })
                             FilterChip(az, { az = !az }, { Text("A–Z") })
+                            FilterChip(minQ > 0, { val n = when (minQ) { 0 -> 720; 720 -> 1080; 1080 -> 2160; else -> 0 }; minQ = n; store.minQ = n }, { Text(when (minQ) { 0 -> "Quality: any"; 2160 -> "4K only"; else -> minQ.toString() + "p+" }) })
                             FilterChip(false, { localPick.launch(arrayOf("video/*", "audio/*")) }, { Text("📁 Local video") })
                             FilterChip(false, { checkLinks(shown) }, { Text("🧹 Check links") })
                             FilterChip(guide, { guide = !guide }, { Text("📋 Guide") })
@@ -960,6 +994,8 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
     var acc by remember { mutableStateOf(0f) }
     var locked by remember { mutableStateOf(false) }
     var endTick by remember { mutableStateOf(0) }
+    var errTick by remember { mutableStateOf(0) }
+    val tried = remember { mutableSetOf<String>() }
     var numDlg by remember { mutableStateOf(false) }
     var numTxt by remember { mutableStateOf("") }
     var boost by remember { mutableStateOf(0) }
@@ -969,10 +1005,11 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
     val am = remember { ctx.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager }
     val exo = remember {
         ExoPlayer.Builder(ctx, DefaultRenderersFactory(ctx).setEnableDecoderFallback(true)).setLoadControl(bufferControl(sp.getInt("buf", 1))).build().also { p ->
+            p.trackSelectionParameters = p.trackSelectionParameters.buildUpon().setForceHighestSupportedBitrate(true).build()
             p.addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_ENDED) endTick++ }
                 override fun onPlayerError(error: PlaybackException) {
-                    Handler(Looper.getMainLooper()).postDelayed({ p.prepare() }, 3000)
+                    Handler(Looper.getMainLooper()).postDelayed({ errTick++ }, 3000)
                 }
             })
         }
@@ -1037,6 +1074,13 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
         if (i >= 0 && pool.isNotEmpty()) cur = pool[(i + d + pool.size) % pool.size]
     }
     LaunchedEffect(endTick) { if (endTick > 0 && isVod(cur)) step(1) }
+    LaunchedEffect(errTick) {
+        if (errTick > 0) {
+            tried.add(cur.url)
+            val alt = list.firstOrNull { it.name == cur.name && it.url !in tried }
+            if (alt != null) { toast = "Trying backup stream"; cur = alt } else { tried.clear(); exo.prepare() }
+        }
+    }
     BackHandler { if (panel) panel = false else onBack() }
     Box(
         Modifier.fillMaxSize().background(Color.Black).pointerInput(Unit) {
