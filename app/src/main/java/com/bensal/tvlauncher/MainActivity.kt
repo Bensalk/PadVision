@@ -379,6 +379,9 @@ class Store(ctx: Context, val profile: Int = 0) {
     var minQ: Int
         get() = p.getInt("minq", 0)
         set(v) { p.edit().putInt("minq", v).apply() }
+    fun bump(u: String) { p.edit().putInt("cnt_" + u, p.getInt("cnt_" + u, 0) + 1).apply() }
+    fun clearCounts() { val e = p.edit(); p.all.keys.filter { it.startsWith("cnt_") }.forEach { e.remove(it) }; e.apply() }
+    fun top(l: List<Channel>): List<Channel> = l.map { it to p.getInt("cnt_" + it.url, 0) }.filter { it.second > 0 }.sortedByDescending { it.second }.take(15).map { it.first }
     var wall: String
         get() = p.getString("wall", "")!!
         set(v) { p.edit().putString("wall", v).apply() }
@@ -615,14 +618,14 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
         item { Text("Privacy: clear history any time", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { store.recents = emptyList(); onChange(); msg = "Watch history cleared" }) { Text("Clear watch history") }
+                Button(onClick = { store.recents = emptyList(); store.clearCounts(); onChange(); msg = "Watch history cleared" }) { Text("Clear watch history") }
                 OutlinedButton(onClick = { store.searches = emptyList(); onChange(); msg = "Search history cleared" }) { Text("Clear search history") }
             }
         }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { clearPositions(); msg = "Resume positions cleared" }) { Text("Clear resume positions") }
-                OutlinedButton(onClick = { store.recents = emptyList(); store.searches = emptyList(); clearPositions(); onChange(); msg = "All history cleared" }) { Text("Clear everything") }
+                OutlinedButton(onClick = { store.recents = emptyList(); store.searches = emptyList(); store.clearCounts(); clearPositions(); onChange(); msg = "All history cleared" }) { Text("Clear everything") }
             }
         }
         item { Text("Streaming buffer", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
@@ -701,7 +704,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 1.1", color = Color.LightGray)
+        Text("Version 1.2", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -745,6 +748,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
     var menuApp by remember { mutableStateOf<AppItem?>(null) }
     var folderText by remember { mutableStateOf("") }
     var folderSel by remember { mutableStateOf<String?>(null) }
+    var multi by remember { mutableStateOf<Channel?>(null) }
     var panel by remember { mutableStateOf(false) }
     var wall by remember { mutableStateOf(store.wall) }
     var city by remember { mutableStateOf(store.city) }
@@ -770,7 +774,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
     var lastTouch by remember { mutableStateOf(System.currentTimeMillis()) }
     var ambient by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { while (true) { delay(30 * 60_000L); reload() } }
-    LaunchedEffect(Unit) { while (true) { delay(5000); if (playing == null && System.currentTimeMillis() - lastTouch > 120_000) ambient = true } }
+    LaunchedEffect(Unit) { while (true) { delay(5000); if (playing == null && multi == null && System.currentTimeMillis() - lastTouch > 120_000) ambient = true } }
     LaunchedEffect(epgUrl, channelsRaw.size) {
         val u = epgUrl.ifBlank { Epg.hint ?: "" }
         if (u.isNotBlank()) { loadEpg(u); epgTick++ }
@@ -811,6 +815,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                         val byGroup = remember(channels) { channels.groupBy { it.group }.toSortedMap() }
                         val fl = remember(channels, favs) { channels.filter { it.url in favs } }
                         val kidsList = remember(channels) { channels.filter { kidsWords.containsMatchIn(it.group) }.take(30) }
+                        val topList = remember(channels, recents) { store.top(channels) }
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                             item { Row(verticalAlignment = Alignment.CenterVertically) { Text(time, fontSize = 36.sp, fontWeight = FontWeight.Light); if (weather.isNotEmpty()) { Spacer(Modifier.width(24.dp)); Text("🌤 $weather", fontSize = 22.sp) }; Spacer(Modifier.width(24.dp)); TextButton(onClick = { panel = true }) { Text("⚡ Quick panel") } } }
                             item { Hero(hero, hero != null && hero.url in favs, { hero?.let { playing = it } }, { hero?.let { toggleFav(it) } }) }
@@ -820,6 +825,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                             if (fl.isNotEmpty()) item {
                                 Shelf("Favorites") { items(fl) { c -> TvCard(c, true, { toggleFav(c) }) { playing = c } } }
                             }
+                            if (topList.isNotEmpty()) item { Shelf("Most Watched") { items(topList) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
                             if (kidsList.isNotEmpty() && !kids) item { Shelf("Kids & Family") { items(kidsList) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
                             val games = visibleApps.filter { it.isGame }
                             if (games.isNotEmpty()) item { Shelf("Games") { items(games) { AppTile(it) { menuApp = it } } } }
@@ -912,8 +918,10 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
         if (ambient && playing == null) Box(Modifier.fillMaxSize().background(Color.Black).clickable { ambient = false; lastTouch = System.currentTimeMillis() }, contentAlignment = Alignment.Center) {
             Text(time, fontSize = 72.sp, fontWeight = FontWeight.Light)
         }
+        multi?.let { m -> MultiView(channels, m) { multi = null } }
         playing?.let { p ->
-            PlayerScreen(channels, p, onBack = { playing = null }) { c ->
+            PlayerScreen(channels, p, onBack = { playing = null }, onMulti = { m -> multi = m; playing = null }) { c ->
+                store.bump(c.url)
                 recents = (listOf(c.url) + recents).distinct().take(15); store.recents = recents
             }
         }
@@ -979,7 +987,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
 }
 
 @Composable
-fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay: (Channel) -> Unit) {
+fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onMulti: (Channel) -> Unit, onPlay: (Channel) -> Unit) {
     val ctx = LocalContext.current
     val sp = remember { ctx.getSharedPreferences("tv", Context.MODE_PRIVATE) }
     var cur by remember { mutableStateOf(start) }
@@ -994,6 +1002,8 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
     var acc by remember { mutableStateOf(0f) }
     var locked by remember { mutableStateOf(false) }
     var endTick by remember { mutableStateOf(0) }
+    var subIdx by remember { mutableStateOf(0) }
+    var pv by remember { mutableStateOf<PlayerView?>(null) }
     var errTick by remember { mutableStateOf(0) }
     val tried = remember { mutableSetOf<String>() }
     var numDlg by remember { mutableStateOf(false) }
@@ -1132,7 +1142,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
                     PlayerView(it).apply {
                         player = exo; setShowSubtitleButton(true); controllerShowTimeoutMs = 3000
                         setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { v -> ui = v == View.VISIBLE })
-                    }
+                    }.also { v -> pv = v }
                 },
                 update = {
                     it.resizeMode = when (mi) {
@@ -1154,6 +1164,12 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
                 TextButton(onClick = { panel = !panel }) { Text("☰ Channels") }
                 TextButton(onClick = { step(-1) }) { Text("◀") }
                 TextButton(onClick = { step(1) }) { Text("▶") }
+                TextButton(onClick = { onMulti(cur) }) { Text("⧉") }
+                TextButton(onClick = {
+                    subIdx = (subIdx + 1) % 3
+                    pv?.subtitleView?.setFractionalTextSize(listOf(0.0533f, 0.075f, 0.1f)[subIdx])
+                    toast = "Subtitle size " + (subIdx + 1)
+                }) { Text("Aa") }
                 TextButton(onClick = { numDlg = true }) { Text("#") }
                 TextButton(onClick = { applyBoost((boost + 1) % 4) }) { Text(if (boost == 0) "Boost" else "+${boost * 3}dB") }
                 TextButton(onClick = { if (hist.size >= 2) cur = hist[hist.size - 2] }) { Text("⇄") }
@@ -1190,6 +1206,53 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onPlay
             items(list) { c ->
                 Text(c.name, Modifier.fillMaxWidth().clickable { cur = c; panel = false }.padding(10.dp), maxLines = 1,
                     color = if (c.url == cur.url) MaterialTheme.colorScheme.primary else Color.White)
+            }
+        }
+    }
+}
+
+@Composable
+fun MultiView(list: List<Channel>, first: Channel, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    var chA by remember { mutableStateOf(first) }
+    var chB by remember { mutableStateOf(list.firstOrNull { it.url != first.url } ?: first) }
+    var audio by remember { mutableStateOf(0) }
+    var pick by remember { mutableStateOf(-1) }
+    var qf by remember { mutableStateOf("") }
+    val pa = remember { ExoPlayer.Builder(ctx).build() }
+    val pb = remember { ExoPlayer.Builder(ctx).build() }
+    DisposableEffect(Unit) { onDispose { pa.release(); pb.release() } }
+    LaunchedEffect(chA) { pa.setMediaItem(MediaItem.fromUri(chA.url)); pa.prepare(); pa.playWhenReady = true }
+    LaunchedEffect(chB) { pb.setMediaItem(MediaItem.fromUri(chB.url)); pb.prepare(); pb.playWhenReady = true }
+    LaunchedEffect(audio) { pa.volume = if (audio == 0) 1f else 0f; pb.volume = if (audio == 1) 1f else 0f }
+    BackHandler { if (pick >= 0) pick = -1 else onBack() }
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        Row(Modifier.fillMaxSize()) {
+            for (i in 0..1) {
+                val ch = if (i == 0) chA else chB
+                Box(Modifier.weight(1f).fillMaxHeight().padding(2.dp).border(if (audio == i) 3.dp else 0.dp, MaterialTheme.colorScheme.primary)) {
+                    AndroidView(
+                        factory = { c -> PlayerView(c).apply { player = if (i == 0) pa else pb; useController = false } },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    Text(ch.name, Modifier.align(Alignment.TopStart).padding(8.dp), color = Color.White, maxLines = 1, fontSize = 14.sp)
+                    Row(Modifier.align(Alignment.BottomCenter).padding(8.dp)) {
+                        TextButton(onClick = { audio = i }) { Text(if (audio == i) "🔊 Audio" else "🔇 Audio") }
+                        TextButton(onClick = { pick = i; qf = "" }) { Text("Change") }
+                    }
+                }
+            }
+        }
+        TextButton(onClick = onBack, modifier = Modifier.align(Alignment.TopCenter)) { Text("✕ Close") }
+        if (pick >= 0) {
+            val shown = remember(qf, list) { list.filter { it.name.contains(qf, true) }.take(200) }
+            Column(Modifier.align(Alignment.Center).width(420.dp).fillMaxHeight(0.8f).clip(RoundedCornerShape(16.dp)).background(Color(0xEE000000)).padding(12.dp)) {
+                OutlinedTextField(qf, { qf = it }, singleLine = true, label = { Text("Search channels") }, modifier = Modifier.fillMaxWidth())
+                LazyColumn {
+                    items(shown) { c ->
+                        Text(c.name, Modifier.fillMaxWidth().clickable { if (pick == 0) chA = c else chB = c; pick = -1 }.padding(10.dp), maxLines = 1, color = Color.White)
+                    }
+                }
             }
         }
     }
