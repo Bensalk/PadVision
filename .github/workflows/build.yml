@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,3 +24,13 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with: { name: TvLauncher-apk, path: app/build/outputs/apk/debug/app-debug.apk }
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER=$(grep -o 'Version [0-9.]*' app/src/main/java/com/bensal/tvlauncher/MainActivity.kt | head -1 | sed 's/Version //')
+          TAG="v${VER}-build${{ github.run_number }}"
+          gh release create "$TAG" "app/build/outputs/apk/debug/app-debug.apk#PadVision.apk" \
+            --title "PadVision ${VER} (build ${{ github.run_number }})" \
+            --notes "Automatic build from commit ${{ github.sha }}" \
+            --target "${{ github.sha }}"
