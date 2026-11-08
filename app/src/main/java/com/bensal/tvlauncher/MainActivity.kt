@@ -1,6 +1,7 @@
 package com.bensal.tvlauncher
 
 import android.app.Activity
+import android.media.audiofx.Equalizer
 import android.util.Xml
 import org.xmlpull.v1.XmlPullParser
 import java.io.InputStream
@@ -382,6 +383,12 @@ class Store(ctx: Context, val profile: Int = 0) {
     fun bump(u: String) { p.edit().putInt("cnt_" + u, p.getInt("cnt_" + u, 0) + 1).apply() }
     fun clearCounts() { val e = p.edit(); p.all.keys.filter { it.startsWith("cnt_") }.forEach { e.remove(it) }; e.apply() }
     fun top(l: List<Channel>): List<Channel> = l.map { it to p.getInt("cnt_" + it.url, 0) }.filter { it.second > 0 }.sortedByDescending { it.second }.take(15).map { it.first }
+    var renames: Map<String, String>
+        get() = p.getString("ren", "")!!.lines().filter { it.contains("\t") }.associate { it.substringBefore("\t") to it.substringAfter("\t") }
+        set(v) { p.edit().putString("ren", v.entries.joinToString("\n") { it.key + "\t" + it.value }).apply() }
+    var lists: List<Pair<String, String>>
+        get() = p.getString("lst", "")!!.lines().filter { it.contains("\t") }.map { it.substringBefore("\t") to it.substringAfter("\t") }
+        set(v) { p.edit().putString("lst", v.joinToString("\n") { it.first + "\t" + it.second }).apply() }
     var wall: String
         get() = p.getString("wall", "")!!
         set(v) { p.edit().putString("wall", v).apply() }
@@ -565,6 +572,7 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
         val sp = ctx.getSharedPreferences("tv", Context.MODE_PRIVATE)
         val e = sp.edit()
         sp.all.keys.filter { it.startsWith("pos_") }.forEach { e.remove(it) }
+        e.remove("watch_sec")
         e.apply()
     }
     if (!ok) {
@@ -704,10 +712,12 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 1.2", color = Color.LightGray)
+        Text("Version 1.3", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
+        val ws = LocalContext.current.getSharedPreferences("tv", Context.MODE_PRIVATE).getLong("watch_sec", 0L)
+        Text("Time watched: ${ws / 3600}h ${ws / 60 % 60}m", color = Color.LightGray)
         Text("Built with Kotlin, Jetpack Compose and Media3", color = Color.LightGray)
     }
 }
@@ -720,8 +730,10 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
     var hiddenCh by remember { mutableStateOf(store.hiddenCh) }
     var kids by remember { mutableStateOf(store.kids) }
     var minQ by remember { mutableStateOf(store.minQ) }
+    var renames by remember { mutableStateOf(store.renames) }
+    var lists by remember { mutableStateOf(store.lists) }
     var epgUrl by remember { mutableStateOf(store.epgUrl) }
-    val channels = remember(channelsRaw, hiddenCh, kids, minQ) { channelsRaw.filter { it.url !in hiddenCh && (!kids || kidsWords.containsMatchIn(it.group)) && (minQ == 0 || quality(it) >= minQ) } }
+    val channels = remember(channelsRaw, hiddenCh, kids, minQ, renames) { channelsRaw.filter { it.url !in hiddenCh && (!kids || kidsWords.containsMatchIn(it.group)) && (minQ == 0 || quality(it) >= minQ) }.map { c -> renames[c.url]?.let { c.copy(name = it) } ?: c } }
     var apps by remember { mutableStateOf(listOf<AppItem>()) }
     var favs by remember { mutableStateOf(store.favs) }
     var pls by remember { mutableStateOf(store.playlists) }
@@ -749,13 +761,16 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
     var folderText by remember { mutableStateOf("") }
     var folderSel by remember { mutableStateOf<String?>(null) }
     var multi by remember { mutableStateOf<Channel?>(null) }
+    var menuCh by remember { mutableStateOf<Channel?>(null) }
+    var chText by remember { mutableStateOf("") }
+    var chList by remember { mutableStateOf("") }
     var panel by remember { mutableStateOf(false) }
     var wall by remember { mutableStateOf(store.wall) }
     var city by remember { mutableStateOf(store.city) }
     var weather by remember { mutableStateOf("") }
     val visibleApps = remember(apps, hidden) { apps.filter { it.pkg !in hidden } }
     fun hide(pkg: String) { hidden = hidden + pkg; store.hidden = hidden }
-    val onChange: () -> Unit = { hidden = store.hidden; wall = store.wall; city = store.city; hiddenCh = store.hiddenCh; kids = store.kids; minQ = store.minQ; recents = store.recents; recent = store.searches; epgUrl = store.epgUrl; favs = store.favs; if (store.playlists != pls) { pls = store.playlists; reload() } }
+    val onChange: () -> Unit = { hidden = store.hidden; wall = store.wall; city = store.city; hiddenCh = store.hiddenCh; kids = store.kids; renames = store.renames; lists = store.lists; minQ = store.minQ; recents = store.recents; recent = store.searches; epgUrl = store.epgUrl; favs = store.favs; if (store.playlists != pls) { pls = store.playlists; reload() } }
     var status by remember { mutableStateOf("") }
     fun checkLinks(list: List<Channel>) {
         scope.launch {
@@ -797,7 +812,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
         }
     }
 
-    CompositionLocalProvider(LocalHide provides { c -> hiddenCh = hiddenCh + c.url; store.hiddenCh = hiddenCh }) {
+    CompositionLocalProvider(LocalHide provides { c -> menuCh = c; chText = c.name; chList = "" }) {
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(themes[ti].glow), cs.background))).pointerInput(Unit) {
         awaitPointerEventScope { while (true) { awaitPointerEvent(PointerEventPass.Initial); lastTouch = System.currentTimeMillis() } }
     }) {
@@ -827,6 +842,10 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                             }
                             if (topList.isNotEmpty()) item { Shelf("Most Watched") { items(topList) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
                             if (kidsList.isNotEmpty() && !kids) item { Shelf("Kids & Family") { items(kidsList) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
+                            lists.map { it.first }.distinct().forEach { ln ->
+                                val ul = lists.filter { it.first == ln }.map { it.second }.toSet()
+                                item { Shelf("⭐ " + ln) { items(channels.filter { it.url in ul }) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
+                            }
                             val games = visibleApps.filter { it.isGame }
                             if (games.isNotEmpty()) item { Shelf("Games") { items(games) { AppTile(it) { menuApp = it } } } }
                             item { Shelf("Apps") { items(visibleApps) { AppTile(it) { menuApp = it } } } }
@@ -920,12 +939,32 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
         }
         multi?.let { m -> MultiView(channels, m) { multi = null } }
         playing?.let { p ->
-            PlayerScreen(channels, p, onBack = { playing = null }, onMulti = { m -> multi = m; playing = null }) { c ->
+            PlayerScreen(channels, p, onBack = { playing = null }, favs = favs, onFav = { toggleFav(it) }, onMulti = { m -> multi = m; playing = null }) { c ->
                 store.bump(c.url)
                 recents = (listOf(c.url) + recents).distinct().take(15); store.recents = recents
             }
         }
     }
+    }
+    menuCh?.let { c ->
+        AlertDialog(
+            onDismissRequest = { menuCh = null },
+            title = { Text(c.name, maxLines = 1) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(chText, { chText = it }, singleLine = true, label = { Text("Rename channel") })
+                    Button(onClick = { if (chText.isNotBlank()) { renames = renames + (c.url to chText.trim()); store.renames = renames }; menuCh = null }) { Text("Save name") }
+                    if (c.url in renames) OutlinedButton(onClick = { renames = renames - c.url; store.renames = renames; menuCh = null }) { Text("Restore original name") }
+                    OutlinedTextField(chList, { chList = it }, singleLine = true, label = { Text("My list name, e.g. News") })
+                    Button(onClick = { if (chList.isNotBlank()) { lists = lists + (chList.trim() to c.url); store.lists = lists }; menuCh = null }) { Text("Add to my list") }
+                    lists.filter { it.second == c.url }.forEach { pr ->
+                        OutlinedButton(onClick = { lists = lists - pr; store.lists = lists; menuCh = null }) { Text("Remove from " + pr.first) }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { hiddenCh = hiddenCh + c.url; store.hiddenCh = hiddenCh; menuCh = null }) { Text("Hide channel") } },
+            dismissButton = { TextButton(onClick = { menuCh = null }) { Text("Cancel") } }
+        )
     }
     menuApp?.let { a ->
         AlertDialog(
@@ -987,9 +1026,10 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
 }
 
 @Composable
-fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onMulti: (Channel) -> Unit, onPlay: (Channel) -> Unit) {
+fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, favs: Set<String>, onFav: (Channel) -> Unit, onMulti: (Channel) -> Unit, onPlay: (Channel) -> Unit) {
     val ctx = LocalContext.current
     val sp = remember { ctx.getSharedPreferences("tv", Context.MODE_PRIVATE) }
+    val scope = rememberCoroutineScope()
     var cur by remember { mutableStateOf(start) }
     var mi by remember { mutableStateOf(sp.getInt("aspect", 0).coerceIn(0, 5)) }
     var panel by remember { mutableStateOf(false) }
@@ -1003,6 +1043,9 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onMult
     var locked by remember { mutableStateOf(false) }
     var endTick by remember { mutableStateOf(0) }
     var subIdx by remember { mutableStateOf(0) }
+    var audioOnly by remember { mutableStateOf(false) }
+    var sound by remember { mutableStateOf(0) }
+    var eq by remember { mutableStateOf<Equalizer?>(null) }
     var pv by remember { mutableStateOf<PlayerView?>(null) }
     var errTick by remember { mutableStateOf(0) }
     val tried = remember { mutableSetOf<String>() }
@@ -1043,6 +1086,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onMult
         w.decorView.keepScreenOn = true
         onDispose {
             runCatching { enh?.release() }
+            runCatching { eq?.release() }
             exo.release()
             c.show(WindowInsetsCompat.Type.systemBars())
             w.decorView.keepScreenOn = false
@@ -1056,6 +1100,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onMult
         while (true) {
             delay(5000)
             if (isVod(cur)) sp.edit().putLong("pos_" + cur.url, exo.currentPosition).apply()
+            if (exo.isPlaying) sp.edit().putLong("watch_sec", sp.getLong("watch_sec", 0L) + 5).apply()
         }
     }
     LaunchedEffect(sleepMin) { if (sleepMin > 0) { delay(sleepMin * 60_000L); onBack() } }
@@ -1076,6 +1121,27 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onMult
             enh?.enabled = true
         }
         toast = if (b == 0) "Boost off" else "Volume boost +${b * 3} dB"
+    }
+    fun applySound(m: Int) {
+        sound = m
+        runCatching {
+            if (eq == null) eq = Equalizer(0, exo.audioSessionId)
+            val e = eq!!
+            e.enabled = true
+            val lo = e.bandLevelRange[0].toInt(); val hi = e.bandLevelRange[1].toInt()
+            val n = e.numberOfBands.toInt()
+            for (b in 0 until n) {
+                val f = b.toFloat() / (n - 1).coerceAtLeast(1)
+                val lvl = when (m) {
+                    1 -> (hi * (1f - f) * 0.7f).toInt()
+                    2 -> if (f in 0.3f..0.7f) (hi * 0.7f).toInt() else 0
+                    3 -> (hi * f * 0.7f).toInt()
+                    else -> 0
+                }
+                e.setBandLevel(b.toShort(), lvl.coerceIn(lo, hi).toShort())
+            }
+        }
+        toast = "Sound: " + listOf("Normal", "Bass", "Vocal", "Treble")[m]
     }
     fun setAspect(i: Int) { mi = i; sp.edit().putInt("aspect", i).apply(); toast = "Aspect: ${names[i]}" }
     fun step(d: Int) {
@@ -1118,7 +1184,16 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onMult
                 }
             )
         }.pointerInput(Unit) {
-            detectTapGestures(onDoubleTap = { o ->
+            detectTapGestures(onPress = {
+                if (!locked) {
+                    val prev = exo.playbackParameters.speed
+                    var held = false
+                    val job = scope.launch { delay(500); held = true; exo.setPlaybackSpeed(2f); toast = "2x speed" }
+                    tryAwaitRelease()
+                    job.cancel()
+                    if (held) exo.setPlaybackSpeed(prev)
+                }
+            }, onDoubleTap = { o ->
                 if (!locked) {
                     val d = if (o.x < size.width / 2) -10_000L else 10_000L
                     exo.seekTo((exo.currentPosition + d).coerceAtLeast(0L))
@@ -1164,6 +1239,13 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, onMult
                 TextButton(onClick = { panel = !panel }) { Text("☰ Channels") }
                 TextButton(onClick = { step(-1) }) { Text("◀") }
                 TextButton(onClick = { step(1) }) { Text("▶") }
+                TextButton(onClick = { onFav(cur) }) { Text(if (cur.url in favs) "★" else "☆") }
+                TextButton(onClick = {
+                    audioOnly = !audioOnly
+                    exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, audioOnly).build()
+                    toast = if (audioOnly) "Audio only" else "Video on"
+                }) { Text(if (audioOnly) "🎧 On" else "🎧") }
+                TextButton(onClick = { applySound((sound + 1) % 4) }) { Text("EQ") }
                 TextButton(onClick = { onMulti(cur) }) { Text("⧉") }
                 TextButton(onClick = {
                     subIdx = (subIdx + 1) % 3
