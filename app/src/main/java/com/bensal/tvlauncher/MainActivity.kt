@@ -1,6 +1,8 @@
 package com.bensal.tvlauncher
 
 import android.app.Activity
+import android.os.Environment
+import java.io.File
 import android.media.audiofx.Equalizer
 import android.util.Xml
 import org.xmlpull.v1.XmlPullParser
@@ -241,6 +243,26 @@ suspend fun loadEpg(u: String) = withContext(Dispatchers.IO) {
     }
 }
 
+suspend fun recordStream(ctx: Context, c: Channel) = withContext(Dispatchers.IO) {
+    runCatching {
+        val dir = ctx.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: ctx.filesDir
+        val safe = c.name.replace(Regex("[^A-Za-z0-9]+"), "_").take(30)
+        val f = File(dir, safe + "_" + System.currentTimeMillis() + ".ts")
+        val conn = URL(c.url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 15000; conn.readTimeout = 15000
+        conn.inputStream.use { i ->
+            f.outputStream().use { o ->
+                val buf = ByteArray(65536)
+                while (isActive) {
+                    val n = i.read(buf)
+                    if (n < 0) break
+                    o.write(buf, 0, n)
+                }
+            }
+        }
+    }
+}
+
 fun bufferControl(level: Int) = when (level) {
     0 -> DefaultLoadControl.Builder().setBufferDurationsMs(5_000, 15_000, 1_000, 2_000).build()
     2 -> DefaultLoadControl.Builder().setBufferDurationsMs(30_000, 120_000, 2_500, 5_000).build()
@@ -405,6 +427,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(s)
         enableEdgeToEdge()
         AppCtx.ctx = applicationContext
+        if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1)
         runCatching {
             @Suppress("DEPRECATION")
             val d = windowManager.defaultDisplay
@@ -543,7 +566,7 @@ fun Sidebar(tab: Int, expanded: Boolean, onToggle: () -> Unit, onTab: (Int) -> U
 }
 
 @Composable
-fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> Unit, pls: List<String>, onAdd: () -> Unit, onRemove: (String) -> Unit, onRefresh: () -> Unit, onChange: () -> Unit, onAddUrl: (String) -> Unit) {
+fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> Unit, pls: List<String>, onAdd: () -> Unit, onRemove: (String) -> Unit, onRefresh: () -> Unit, onChange: () -> Unit, onAddUrl: (String) -> Unit, onPlayFile: (Channel) -> Unit) {
     val ctx = LocalContext.current
     var city by remember { mutableStateOf(store.city) }
     var auto by remember { mutableStateOf(store.auto) }
@@ -552,6 +575,7 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
     var kidsOn by remember { mutableStateOf(store.kids) }
     var epgText by remember { mutableStateOf(store.epgUrl) }
     var msg by remember { mutableStateOf("") }
+    var recTick by remember { mutableStateOf(0) }
     val clip = LocalClipboardManager.current
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -582,6 +606,7 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
         }
         return
     }
+    val recFiles = remember(recTick) { (ctx.getExternalFilesDir(Environment.DIRECTORY_MOVIES)?.listFiles()?.toList() ?: emptyList()).sortedByDescending { it.lastModified() } }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { Text("Theme", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
         item {
@@ -621,6 +646,15 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(epgText, { epgText = it }, singleLine = true, label = { Text("Guide URL (.xml or .xml.gz)") })
                 Button(onClick = { store.epgUrl = epgText.trim(); onChange() }) { Text("Load guide") }
+            }
+        }
+        item { Text("Recordings", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
+        if (recFiles.isEmpty()) item { Text("No recordings yet. Use the record button in the player (direct streams only).", color = Color.LightGray) }
+        items(recFiles) { f ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(f.name + "  " + (f.length() / 1_000_000) + " MB", Modifier.weight(1f), maxLines = 1)
+                TextButton(onClick = { onPlayFile(Channel(f.name, Uri.fromFile(f).toString(), "Recording", null)) }) { Text("Play") }
+                TextButton(onClick = { f.delete(); recTick++ }) { Text("Delete") }
             }
         }
         item { Text("Privacy: clear history any time", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
@@ -712,7 +746,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 1.3", color = Color.LightGray)
+        Text("Version 1.4", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -928,7 +962,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                         }
                     }
                     4 -> Settings(store, ti, onTheme, onProfile, pls, { showAdd = true },
-                        { u -> pls = pls - u; store.playlists = pls; reload() }, { reload() }, onChange, { u -> pls = pls + u; store.playlists = pls; reload() })
+                        { u -> pls = pls - u; store.playlists = pls; reload() }, { reload() }, onChange, { u -> pls = pls + u; store.playlists = pls; reload() }, { c -> playing = c })
                     else -> About()
                 }
             }
@@ -1044,6 +1078,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, favs: 
     var endTick by remember { mutableStateOf(0) }
     var subIdx by remember { mutableStateOf(0) }
     var audioOnly by remember { mutableStateOf(false) }
+    var rec by remember { mutableStateOf<Job?>(null) }
     var sound by remember { mutableStateOf(0) }
     var eq by remember { mutableStateOf<Equalizer?>(null) }
     var pv by remember { mutableStateOf<PlayerView?>(null) }
@@ -1087,6 +1122,8 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, favs: 
         onDispose {
             runCatching { enh?.release() }
             runCatching { eq?.release() }
+            runCatching { rec?.cancel() }
+            runCatching { ctx.stopService(Intent(ctx, PlayService::class.java)) }
             exo.release()
             c.show(WindowInsetsCompat.Type.systemBars())
             w.decorView.keepScreenOn = false
@@ -1095,6 +1132,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, favs: 
     LaunchedEffect(cur) {
         exo.setMediaItem(MediaItem.fromUri(cur.url))
         if (isVod(cur)) exo.seekTo(sp.getLong("pos_" + cur.url, 0L))
+        runCatching { ctx.startForegroundService(Intent(ctx, PlayService::class.java).putExtra("name", cur.name)) }
         exo.prepare(); exo.playWhenReady = true; onPlay(cur)
         if (hist.lastOrNull()?.url != cur.url) hist.add(cur)
         while (true) {
@@ -1245,6 +1283,11 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, favs: 
                     exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, audioOnly).build()
                     toast = if (audioOnly) "Audio only" else "Video on"
                 }) { Text(if (audioOnly) "🎧 On" else "🎧") }
+                TextButton(onClick = {
+                    if (rec != null) { rec?.cancel(); rec = null; toast = "Recording saved" }
+                    else if (!cur.url.startsWith("http") || cur.url.substringBefore('?').lowercase().endsWith(".m3u8")) toast = "Recording works only on direct streams, not .m3u8"
+                    else { rec = scope.launch { recordStream(ctx, cur) }; toast = "Recording..." }
+                }) { Text(if (rec != null) "⏹ Stop" else "⏺") }
                 TextButton(onClick = { applySound((sound + 1) % 4) }) { Text("EQ") }
                 TextButton(onClick = { onMulti(cur) }) { Text("⧉") }
                 TextButton(onClick = {
