@@ -1,6 +1,14 @@
 package com.bensal.tvlauncher
 
 import android.app.Activity
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
+import android.net.TrafficStats
+import androidx.core.content.ContextCompat
 import android.os.Environment
 import java.io.File
 import android.media.audiofx.Equalizer
@@ -190,7 +198,11 @@ val themes = listOf(
     PTheme("Neon", 0xFF07060F, 0xFF140F2A, 0xFF00F0FF, 0xFF2A0F3A),
     PTheme("Sunset", 0xFF1A0B12, 0xFF2A1420, 0xFFFF7A45, 0xFF4A1D2E),
     PTheme("Ocean", 0xFF06121C, 0xFF0D2233, 0xFF2EA8FF, 0xFF0B3A57),
-    PTheme("Forest", 0xFF07130D, 0xFF0F2318, 0xFF3DDC84, 0xFF123B26)
+    PTheme("Forest", 0xFF07130D, 0xFF0F2318, 0xFF3DDC84, 0xFF123B26),
+    PTheme("Crimson", 0xFF140608, 0xFF241014, 0xFFFF3B5C, 0xFF3A0F18),
+    PTheme("Gold", 0xFF120F05, 0xFF211B0B, 0xFFFFC53D, 0xFF3A2D0A),
+    PTheme("Mint", 0xFF06120F, 0xFF0D211C, 0xFF5CF2C8, 0xFF0F3A30),
+    PTheme("Slate", 0xFF0E1116, 0xFF1A1F27, 0xFF9AA7B8, 0xFF232A35)
 )
 
 data class Prog(val start: Long, val stop: Long, val title: String)
@@ -199,6 +211,21 @@ object Epg {
     var hint: String? = null
 }
 var epgTick by mutableStateOf(0)
+var cardScale by mutableStateOf(1f)
+var pendingTick by mutableStateOf(0)
+object Pending {
+    var url: String? = null
+}
+
+fun scheduleAlarm(ctx: Context, c: Channel, at: Long) {
+    val i = Intent(ctx, AlarmReceiver::class.java)
+    i.putExtra("name", c.name)
+    i.putExtra("url", c.url)
+    val flags = (PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+    val pi = PendingIntent.getBroadcast(ctx, c.url.hashCode(), i, flags)
+    val am = ctx.getSystemService(AlarmManager::class.java)
+    am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+}
 val HM = SimpleDateFormat("HH:mm", Locale.getDefault())
 
 fun nowNext(c: Channel): Pair<Prog?, Prog?> {
@@ -261,6 +288,56 @@ suspend fun recordStream(ctx: Context, c: Channel) = withContext(Dispatchers.IO)
             }
         }
     }
+}
+
+suspend fun recordHls(ctx: Context, c: Channel): Boolean = withContext(Dispatchers.IO) {
+    fun get(u: String): String {
+        val x = URL(u).openConnection() as HttpURLConnection
+        x.connectTimeout = 15000; x.readTimeout = 15000
+        return x.inputStream.bufferedReader().readText()
+    }
+    fun abs(base: String, ref: String): String = URL(URL(base), ref).toString()
+    var url = c.url
+    var text = runCatching { get(url) }.getOrNull() ?: return@withContext false
+    if (text.contains("#EXT-X-STREAM-INF")) {
+        val lines = text.lines()
+        var best = -1L
+        var bestUri: String? = null
+        for (k in lines.indices) {
+            if (lines[k].startsWith("#EXT-X-STREAM-INF")) {
+                val bw = Regex("BANDWIDTH=(\\d+)").find(lines[k])?.groupValues?.get(1)?.toLong() ?: 0L
+                val uri = lines.drop(k + 1).firstOrNull { it.isNotBlank() && !it.startsWith("#") }
+                if (uri != null && bw > best) { best = bw; bestUri = uri }
+            }
+        }
+        if (bestUri == null) return@withContext false
+        url = abs(url, bestUri)
+        text = runCatching { get(url) }.getOrNull() ?: return@withContext false
+    }
+    if (text.contains("METHOD=AES") || text.contains("#EXT-X-MAP")) return@withContext false
+    val dir = ctx.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: ctx.filesDir
+    val safe = c.name.replace(Regex("[^A-Za-z0-9]+"), "_").take(30)
+    val f = File(dir, safe + "_" + System.currentTimeMillis() + ".ts")
+    val seen = HashSet<String>()
+    runCatching {
+        f.outputStream().use { o ->
+            while (isActive) {
+                for (sg in text.lines().filter { it.isNotBlank() && !it.startsWith("#") }) {
+                    val su = abs(url, sg)
+                    if (seen.add(su)) {
+                        val x = URL(su).openConnection() as HttpURLConnection
+                        x.connectTimeout = 15000; x.readTimeout = 15000
+                        x.inputStream.use { it.copyTo(o) }
+                    }
+                    if (!isActive) break
+                }
+                if (text.contains("#EXT-X-ENDLIST")) break
+                delay(2000)
+                text = get(url)
+            }
+        }
+    }
+    true
 }
 
 fun bufferControl(level: Int) = when (level) {
@@ -411,6 +488,9 @@ class Store(ctx: Context, val profile: Int = 0) {
     var lists: List<Pair<String, String>>
         get() = p.getString("lst", "")!!.lines().filter { it.contains("\t") }.map { it.substringBefore("\t") to it.substringAfter("\t") }
         set(v) { p.edit().putString("lst", v.joinToString("\n") { it.first + "\t" + it.second }).apply() }
+    var cardSize: Int
+        get() = p.getInt("card", 1)
+        set(v) { p.edit().putInt("card", v).apply() }
     var wall: String
         get() = p.getString("wall", "")!!
         set(v) { p.edit().putString("wall", v).apply() }
@@ -423,10 +503,13 @@ class Store(ctx: Context, val profile: Int = 0) {
 }
 
 class MainActivity : ComponentActivity() {
+    private fun handle(i: Intent?) { i?.getStringExtra("play_url")?.let { Pending.url = it; pendingTick++ } }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); handle(intent) }
     override fun onCreate(s: Bundle?) {
         super.onCreate(s)
         enableEdgeToEdge()
         AppCtx.ctx = applicationContext
+        handle(intent)
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1)
         runCatching {
             @Suppress("DEPRECATION")
@@ -451,6 +534,7 @@ fun Root() {
     var prof by remember { mutableStateOf(meta.getInt("prof", 0)) }
     val store = remember(prof) { Store(ctx, prof) }
     var ti by remember(prof) { mutableStateOf(store.theme) }
+    LaunchedEffect(prof) { cardScale = listOf(0.85f, 1f, 1.2f)[store.cardSize.coerceIn(0, 2)] }
     val t = themes[ti]
     val accent = if (store.accent >= 0f) Color.hsv(store.accent * 360f, 0.65f, 1f) else Color(t.accent)
     MaterialTheme(
@@ -469,7 +553,7 @@ fun TvCard(c: Channel, fav: Boolean, onFav: () -> Unit, onClick: () -> Unit) {
     val s by animateFloatAsState(if (f) 1.08f else 1f, label = "s")
     val shape = RoundedCornerShape(16.dp)
     Box(
-        Modifier.width(240.dp).height(140.dp).scale(s).clip(shape)
+        Modifier.width((240 * cardScale).dp).height((140 * cardScale).dp).scale(s).clip(shape)
             .background(MaterialTheme.colorScheme.surface)
             .border(if (f) 3.dp else 0.dp, MaterialTheme.colorScheme.primary, shape)
             .onFocusChanged { f = it.isFocused }.combinedClickable(onLongClick = { hide(c) }, onClick = onClick)
@@ -571,6 +655,7 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
     var city by remember { mutableStateOf(store.city) }
     var auto by remember { mutableStateOf(store.auto) }
     var buf by remember { mutableStateOf(store.buffer) }
+    var card by remember { mutableStateOf(store.cardSize) }
     var libSec by remember { mutableStateOf("Popular") }
     var kidsOn by remember { mutableStateOf(store.kids) }
     var epgText by remember { mutableStateOf(store.epgUrl) }
@@ -649,6 +734,7 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
             }
         }
         item { Text("Recordings", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
+        item { Text("Using " + recFiles.sumOf { it.length() } / 1_000_000 + " MB of storage", color = Color.LightGray) }
         if (recFiles.isEmpty()) item { Text("No recordings yet. Use the record button in the player (direct streams only).", color = Color.LightGray) }
         items(recFiles) { f ->
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -668,6 +754,14 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { clearPositions(); msg = "Resume positions cleared" }) { Text("Clear resume positions") }
                 OutlinedButton(onClick = { store.recents = emptyList(); store.searches = emptyList(); store.clearCounts(); clearPositions(); onChange(); msg = "All history cleared" }) { Text("Clear everything") }
+            }
+        }
+        item { Text("Card size", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("Small", "Medium", "Large").forEachIndexed { i, n ->
+                    FilterChip(card == i, { card = i; store.cardSize = i; cardScale = listOf(0.85f, 1f, 1.2f)[i] }, { Text(n) })
+                }
             }
         }
         item { Text("Streaming buffer", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
@@ -746,7 +840,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 1.4", color = Color.LightGray)
+        Text("Version 1.7", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -823,6 +917,10 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
     var lastTouch by remember { mutableStateOf(System.currentTimeMillis()) }
     var ambient by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { while (true) { delay(30 * 60_000L); reload() } }
+    LaunchedEffect(pendingTick, channelsRaw.size) {
+        val u = Pending.url
+        if (u != null) channelsRaw.firstOrNull { it.url == u }?.let { playing = it; Pending.url = null }
+    }
     LaunchedEffect(Unit) { while (true) { delay(5000); if (playing == null && multi == null && System.currentTimeMillis() - lastTouch > 120_000) ambient = true } }
     LaunchedEffect(epgUrl, channelsRaw.size) {
         val u = epgUrl.ifBlank { Epg.hint ?: "" }
@@ -865,6 +963,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                         val fl = remember(channels, favs) { channels.filter { it.url in favs } }
                         val kidsList = remember(channels) { channels.filter { kidsWords.containsMatchIn(it.group) }.take(30) }
                         val topList = remember(channels, recents) { store.top(channels) }
+                        val recs = remember(playing) { (ctx.getExternalFilesDir(Environment.DIRECTORY_MOVIES)?.listFiles()?.toList() ?: emptyList()).sortedByDescending { it.lastModified() }.take(20).map { f -> Channel(f.name, Uri.fromFile(f).toString(), "Recording", null) } }
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                             item { Row(verticalAlignment = Alignment.CenterVertically) { Text(time, fontSize = 36.sp, fontWeight = FontWeight.Light); if (weather.isNotEmpty()) { Spacer(Modifier.width(24.dp)); Text("🌤 $weather", fontSize = 22.sp) }; Spacer(Modifier.width(24.dp)); TextButton(onClick = { panel = true }) { Text("⚡ Quick panel") } } }
                             item { Hero(hero, hero != null && hero.url in favs, { hero?.let { playing = it } }, { hero?.let { toggleFav(it) } }) }
@@ -874,6 +973,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                             if (fl.isNotEmpty()) item {
                                 Shelf("Favorites") { items(fl) { c -> TvCard(c, true, { toggleFav(c) }) { playing = c } } }
                             }
+                            if (recs.isNotEmpty()) item { Shelf("Recordings") { items(recs) { c -> TvCard(c, false, {}) { playing = c } } } }
                             if (topList.isNotEmpty()) item { Shelf("Most Watched") { items(topList) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
                             if (kidsList.isNotEmpty() && !kids) item { Shelf("Kids & Family") { items(kidsList) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
                             lists.map { it.first }.distinct().forEach { ln ->
@@ -896,6 +996,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                         var vod by remember { mutableStateOf(false) }
                         var az by remember { mutableStateOf(false) }
                         var guide by remember { mutableStateOf(false) }
+                        var gridMode by remember { mutableStateOf(true) }
                         val base = remember(channels, vod, az, minQ) { channels.filter { isVod(it) == vod }.let { l -> if (az) l.sortedBy { it.name.lowercase() } else if (minQ > 0) l.sortedByDescending { quality(it) } else l } }
                         val groups = remember(base) { base.map { it.group }.distinct().sorted() }
                         val shown = remember(base, g) { base.filter { g == null || it.group == g } }
@@ -907,6 +1008,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                             FilterChip(false, { localPick.launch(arrayOf("video/*", "audio/*")) }, { Text("📁 Local video") })
                             FilterChip(false, { checkLinks(shown) }, { Text("🧹 Check links") })
                             FilterChip(guide, { guide = !guide }, { Text("📋 Guide") })
+                            if (guide) FilterChip(gridMode, { gridMode = !gridMode }, { Text("▦ Grid") })
                         }
                         if (status.isNotEmpty()) Text(status, fontSize = 12.sp, color = Color.LightGray)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
@@ -918,7 +1020,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                         if (guide) {
                             val tick = epgTick
                             if (tick >= 0 && Epg.data.isEmpty()) Text("No guide data yet. Add an XMLTV guide link in Settings, or use a playlist that includes one.", color = Color.LightGray)
-                            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (gridMode) GuideGrid(shown) { playing = it } else LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 items(shown.take(300)) { c ->
                                     val (n, x) = nowNext(c)
                                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { playing = c }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -927,6 +1029,8 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
                                             Text(n?.let { "${HM.format(Date(it.start))}-${HM.format(Date(it.stop))}  ${it.title}" } ?: "No guide data", maxLines = 1)
                                             if (x != null) Text("Next ${HM.format(Date(x.start))}  ${x.title}", maxLines = 1, fontSize = 12.sp, color = Color.LightGray)
                                         }
+                                        Spacer(Modifier.weight(1f))
+                                        if (x != null) TextButton(onClick = { scheduleAlarm(ctx, c, x.start); status = "Reminder set for " + HM.format(Date(x.start)) + " on " + c.name }) { Text("⏰") }
                                     }
                                 }
                             }
@@ -1129,6 +1233,19 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, favs: 
             w.decorView.keepScreenOn = false
         }
     }
+    DisposableEffect(Unit) {
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, i: Intent?) {
+                when (i?.action) {
+                    "com.bensal.tvlauncher.TOGGLE" -> exo.playWhenReady = !exo.playWhenReady
+                    "com.bensal.tvlauncher.STOP" -> onBack()
+                }
+            }
+        }
+        val f = IntentFilter().apply { addAction("com.bensal.tvlauncher.TOGGLE"); addAction("com.bensal.tvlauncher.STOP") }
+        ContextCompat.registerReceiver(ctx, r, f, ContextCompat.RECEIVER_NOT_EXPORTED)
+        onDispose { runCatching { ctx.unregisterReceiver(r) } }
+    }
     LaunchedEffect(cur) {
         exo.setMediaItem(MediaItem.fromUri(cur.url))
         if (isVod(cur)) exo.seekTo(sp.getLong("pos_" + cur.url, 0L))
@@ -1144,9 +1261,13 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, favs: 
     LaunchedEffect(sleepMin) { if (sleepMin > 0) { delay(sleepMin * 60_000L); onBack() } }
     LaunchedEffect(toast) { if (toast.isNotEmpty()) { delay(1500); toast = "" } }
     LaunchedEffect(showInfo) {
+        var lastRx = TrafficStats.getUidRxBytes(android.os.Process.myUid())
         while (showInfo) {
             val v = exo.videoSize
-            info = "${v.width}x${v.height}  •  ${((exo.videoFormat?.bitrate ?: 0).coerceAtLeast(0)) / 1000} kbps"
+            val rx = TrafficStats.getUidRxBytes(android.os.Process.myUid())
+            val mbps = if (lastRx >= 0 && rx >= lastRx) (rx - lastRx) * 8 / 1_000_000.0 else 0.0
+            lastRx = rx
+            info = "${v.width}x${v.height}  •  ${((exo.videoFormat?.bitrate ?: 0).coerceAtLeast(0)) / 1000} kbps  •  net " + String.format("%.1f", mbps) + " Mbps"
             delay(1000)
         }
         info = ""
@@ -1285,9 +1406,31 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, favs: 
                 }) { Text(if (audioOnly) "🎧 On" else "🎧") }
                 TextButton(onClick = {
                     if (rec != null) { rec?.cancel(); rec = null; toast = "Recording saved" }
-                    else if (!cur.url.startsWith("http") || cur.url.substringBefore('?').lowercase().endsWith(".m3u8")) toast = "Recording works only on direct streams, not .m3u8"
-                    else { rec = scope.launch { recordStream(ctx, cur) }; toast = "Recording..." }
+                    else if (!cur.url.startsWith("http")) toast = "Only online streams can be recorded"
+                    else {
+                        val target = cur
+                        rec = scope.launch {
+                            withTimeoutOrNull(7_200_000L) {
+                                val ok = if (target.url.contains(".m3u8")) recordHls(ctx, target) else { recordStream(ctx, target); true }
+                                if (!ok) toast = "This stream can't be recorded (encrypted or unsupported)"
+                            }
+                            rec = null
+                        }
+                        toast = "Recording (stops after 2 hours)"
+                    }
                 }) { Text(if (rec != null) "⏹ Stop" else "⏺") }
+                TextButton(onClick = {
+                    val cal = java.util.Calendar.getInstance()
+                    android.app.TimePickerDialog(ctx, { _, h, m ->
+                        val t = java.util.Calendar.getInstance().apply {
+                            set(java.util.Calendar.HOUR_OF_DAY, h); set(java.util.Calendar.MINUTE, m); set(java.util.Calendar.SECOND, 0)
+                        }
+                        if (t.timeInMillis <= System.currentTimeMillis()) t.add(java.util.Calendar.DAY_OF_YEAR, 1)
+                        scheduleAlarm(ctx, cur, t.timeInMillis)
+                        toast = "Alarm set for " + HM.format(Date(t.timeInMillis))
+                    }, cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE), true).show()
+                }) { Text("⏰") }
+                TextButton(onClick = { exo.seekToDefaultPosition() }) { Text("LIVE") }
                 TextButton(onClick = { applySound((sound + 1) % 4) }) { Text("EQ") }
                 TextButton(onClick = { onMulti(cur) }) { Text("⧉") }
                 TextButton(onClick = {
@@ -1337,45 +1480,100 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, favs: 
 }
 
 @Composable
-fun MultiView(list: List<Channel>, first: Channel, onBack: () -> Unit) {
-    val ctx = LocalContext.current
-    var chA by remember { mutableStateOf(first) }
-    var chB by remember { mutableStateOf(list.firstOrNull { it.url != first.url } ?: first) }
-    var audio by remember { mutableStateOf(0) }
-    var pick by remember { mutableStateOf(-1) }
-    var qf by remember { mutableStateOf("") }
-    val pa = remember { ExoPlayer.Builder(ctx).build() }
-    val pb = remember { ExoPlayer.Builder(ctx).build() }
-    DisposableEffect(Unit) { onDispose { pa.release(); pb.release() } }
-    LaunchedEffect(chA) { pa.setMediaItem(MediaItem.fromUri(chA.url)); pa.prepare(); pa.playWhenReady = true }
-    LaunchedEffect(chB) { pb.setMediaItem(MediaItem.fromUri(chB.url)); pb.prepare(); pb.playWhenReady = true }
-    LaunchedEffect(audio) { pa.volume = if (audio == 0) 1f else 0f; pb.volume = if (audio == 1) 1f else 0f }
-    BackHandler { if (pick >= 0) pick = -1 else onBack() }
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        Row(Modifier.fillMaxSize()) {
-            for (i in 0..1) {
-                val ch = if (i == 0) chA else chB
-                Box(Modifier.weight(1f).fillMaxHeight().padding(2.dp).border(if (audio == i) 3.dp else 0.dp, MaterialTheme.colorScheme.primary)) {
-                    AndroidView(
-                        factory = { c -> PlayerView(c).apply { player = if (i == 0) pa else pb; useController = false } },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    Text(ch.name, Modifier.align(Alignment.TopStart).padding(8.dp), color = Color.White, maxLines = 1, fontSize = 14.sp)
-                    Row(Modifier.align(Alignment.BottomCenter).padding(8.dp)) {
-                        TextButton(onClick = { audio = i }) { Text(if (audio == i) "🔊 Audio" else "🔇 Audio") }
-                        TextButton(onClick = { pick = i; qf = "" }) { Text("Change") }
+fun GuideGrid(list: List<Channel>, onPlay: (Channel) -> Unit) {
+    val scroll = rememberScrollState()
+    val t0 = remember { System.currentTimeMillis() / 1_800_000L * 1_800_000L }
+    val perMin = 4f
+    val rows = remember(list, epgTick) { list.filter { c -> c.tvgId != null && Epg.data.containsKey(c.tvgId) }.take(80) }
+    Column {
+        Row(Modifier.horizontalScroll(scroll).padding(start = 180.dp)) {
+            for (i in 0 until 48) {
+                Text(HM.format(Date(t0 + i * 1_800_000L)), Modifier.width((30 * perMin).dp), fontSize = 12.sp, color = Color.LightGray)
+            }
+        }
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            items(rows) { c ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(c.name, Modifier.width(180.dp).clickable { onPlay(c) }.padding(end = 8.dp), maxLines = 1, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Row(Modifier.horizontalScroll(scroll)) {
+                        var cursor = t0
+                        for (p in Epg.data[c.tvgId ?: ""] ?: emptyList()) {
+                            if (p.stop <= cursor) continue
+                            val st = maxOf(p.start, cursor)
+                            if (st > cursor) Spacer(Modifier.width(((st - cursor) / 60_000f * perMin).dp))
+                            Box(
+                                Modifier.width(((p.stop - st) / 60_000f * perMin).dp).height(44.dp).padding(end = 2.dp)
+                                    .clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surface)
+                                    .clickable { onPlay(c) }.padding(6.dp)
+                            ) { Text(p.title, maxLines = 2, fontSize = 11.sp) }
+                            cursor = p.stop
+                        }
                     }
                 }
             }
         }
-        TextButton(onClick = onBack, modifier = Modifier.align(Alignment.TopCenter)) { Text("✕ Close") }
+    }
+}
+
+@Composable
+fun MultiView(list: List<Channel>, first: Channel, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    var n by remember { mutableStateOf(2) }
+    var audio by remember { mutableStateOf(0) }
+    var pick by remember { mutableStateOf(-1) }
+    var qf by remember { mutableStateOf("") }
+    val chs = remember {
+        val others = list.filter { it.url != first.url }.take(3)
+        val l = listOf(first) + others
+        mutableStateListOf<Channel>().also { it.addAll(l + List(4 - l.size) { first }) }
+    }
+    val ps = remember {
+        List(4) {
+            ExoPlayer.Builder(ctx).build().also { p ->
+                p.trackSelectionParameters = p.trackSelectionParameters.buildUpon().setMaxVideoSize(1280, 720).build()
+            }
+        }
+    }
+    DisposableEffect(Unit) { onDispose { ps.forEach { it.release() } } }
+    for (i in 0..3) {
+        LaunchedEffect(chs[i], n) {
+            if (i < n) { ps[i].setMediaItem(MediaItem.fromUri(chs[i].url)); ps[i].prepare(); ps[i].playWhenReady = true } else ps[i].stop()
+        }
+    }
+    LaunchedEffect(audio) { ps.forEachIndexed { i, p -> p.volume = if (i == audio) 1f else 0f } }
+    BackHandler { if (pick >= 0) pick = -1 else onBack() }
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        val groups = if (n == 2) listOf(listOf(0, 1)) else listOf(listOf(0, 1), listOf(2, 3))
+        Column(Modifier.fillMaxSize()) {
+            groups.forEach { g ->
+                Row(Modifier.weight(1f).fillMaxWidth()) {
+                    g.forEach { i ->
+                        Box(Modifier.weight(1f).fillMaxHeight().padding(2.dp).border(if (audio == i) 3.dp else 0.dp, MaterialTheme.colorScheme.primary)) {
+                            AndroidView(
+                                factory = { c -> PlayerView(c).apply { player = ps[i]; useController = false } },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            Text(chs[i].name, Modifier.align(Alignment.TopStart).padding(8.dp), color = Color.White, maxLines = 1, fontSize = 13.sp)
+                            Row(Modifier.align(Alignment.BottomCenter).padding(4.dp)) {
+                                TextButton(onClick = { audio = i }) { Text(if (audio == i) "🔊" else "🔇") }
+                                TextButton(onClick = { pick = i; qf = "" }) { Text("Change") }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Row(Modifier.align(Alignment.TopCenter)) {
+            TextButton(onClick = { n = if (n == 2) 4 else 2 }) { Text(if (n == 2) "▦ 4 views" else "◫ 2 views") }
+            TextButton(onClick = onBack) { Text("✕ Close") }
+        }
         if (pick >= 0) {
             val shown = remember(qf, list) { list.filter { it.name.contains(qf, true) }.take(200) }
             Column(Modifier.align(Alignment.Center).width(420.dp).fillMaxHeight(0.8f).clip(RoundedCornerShape(16.dp)).background(Color(0xEE000000)).padding(12.dp)) {
                 OutlinedTextField(qf, { qf = it }, singleLine = true, label = { Text("Search channels") }, modifier = Modifier.fillMaxWidth())
                 LazyColumn {
                     items(shown) { c ->
-                        Text(c.name, Modifier.fillMaxWidth().clickable { if (pick == 0) chA = c else chB = c; pick = -1 }.padding(10.dp), maxLines = 1, color = Color.White)
+                        Text(c.name, Modifier.fillMaxWidth().clickable { chs[pick] = c; pick = -1 }.padding(10.dp), maxLines = 1, color = Color.White)
                     }
                 }
             }
