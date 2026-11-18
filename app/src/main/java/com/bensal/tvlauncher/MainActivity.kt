@@ -88,6 +88,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -547,7 +548,8 @@ fun Root() {
     LaunchedEffect(prof) {
         val tv = (ctx.getSystemService(Context.UI_MODE_SERVICE) as UiModeManager).currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
         tvBoost = if (tv) 1.25f else 1f
-        cardScale = listOf(0.85f, 1f, 1.2f)[store.cardSize.coerceIn(0, 2)] * tvBoost
+        val phoneBoost = if (ctx.resources.configuration.smallestScreenWidthDp < 600) 0.75f else 1f
+        cardScale = listOf(0.85f, 1f, 1.2f)[store.cardSize.coerceIn(0, 2)] * tvBoost * phoneBoost
     }
     val t = themes[ti]
     val accent = if (store.accent >= 0f) Color.hsv(store.accent * 360f, 0.65f, 1f) else Color(t.accent)
@@ -556,7 +558,8 @@ fun Root() {
             primary = accent, onPrimary = if (accent.luminance() > 0.4f) Color.Black else Color.White,
             background = Color(t.bg), surface = Color(t.surface), surfaceVariant = Color(t.surface)
         )
-    ) { CompositionLocalProvider(LocalContentColor provides Color.White) { key(prof) { App(store, ti, { pr -> meta.edit().putInt("prof", pr).apply(); prof = pr }) { ti = it; store.theme = it } } } }
+    val isPhone = LocalConfiguration.current.smallestScreenWidthDp < 600
+    ) { CompositionLocalProvider(LocalContentColor provides Color.White) { key(prof) { App(store, ti, isPhone, { pr -> meta.edit().putInt("prof", pr).apply(); prof = pr }) { ti = it; store.theme = it } } } }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -865,7 +868,7 @@ fun About() {
 }
 
 @Composable
-fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit) {
+fun App(store: Store, ti: Int, isPhone: Boolean = false, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var channelsRaw by remember { mutableStateOf(listOf<Channel>()) }
@@ -882,7 +885,7 @@ fun App(store: Store, ti: Int, onProfile: (Int) -> Unit, onTheme: (Int) -> Unit)
     var recents by remember { mutableStateOf(store.recents) }
     var recent by remember { mutableStateOf(store.searches) }
     var playing by remember { mutableStateOf<Channel?>(null) }
-    var tab by remember { mutableStateOf(0) }
+    var tab by remember { mutableStateOf(if (isPhone) 1 else 0) }
     var expanded by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
