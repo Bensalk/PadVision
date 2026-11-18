@@ -1,6 +1,16 @@
 package com.bensal.tvlauncher
 
 import android.app.Activity
+import android.app.UiModeManager
+import android.content.res.Configuration
+import android.view.KeyEvent
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.nativeKeyEvent
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import android.app.AlarmManager
@@ -212,6 +222,7 @@ object Epg {
 }
 var epgTick by mutableStateOf(0)
 var cardScale by mutableStateOf(1f)
+var tvBoost = 1f
 var pendingTick by mutableStateOf(0)
 object Pending {
     var url: String? = null
@@ -534,7 +545,11 @@ fun Root() {
     var prof by remember { mutableStateOf(meta.getInt("prof", 0)) }
     val store = remember(prof) { Store(ctx, prof) }
     var ti by remember(prof) { mutableStateOf(store.theme) }
-    LaunchedEffect(prof) { cardScale = listOf(0.85f, 1f, 1.2f)[store.cardSize.coerceIn(0, 2)] }
+    LaunchedEffect(prof) {
+        val tv = (ctx.getSystemService(Context.UI_MODE_SERVICE) as UiModeManager).currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
+        tvBoost = if (tv) 1.25f else 1f
+        cardScale = listOf(0.85f, 1f, 1.2f)[store.cardSize.coerceIn(0, 2)] * tvBoost
+    }
     val t = themes[ti]
     val accent = if (store.accent >= 0f) Color.hsv(store.accent * 360f, 0.65f, 1f) else Color(t.accent)
     MaterialTheme(
@@ -760,7 +775,7 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("Small", "Medium", "Large").forEachIndexed { i, n ->
-                    FilterChip(card == i, { card = i; store.cardSize = i; cardScale = listOf(0.85f, 1f, 1.2f)[i] }, { Text(n) })
+                    FilterChip(card == i, { card = i; store.cardSize = i; cardScale = listOf(0.85f, 1f, 1.2f)[i] * tvBoost }, { Text(n) })
                 }
             }
         }
@@ -840,7 +855,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 1.7", color = Color.LightGray)
+        Text("Version 1.8", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -1182,6 +1197,10 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, favs: 
     var endTick by remember { mutableStateOf(0) }
     var subIdx by remember { mutableStateOf(0) }
     var audioOnly by remember { mutableStateOf(false) }
+    var ctlMode by remember { mutableStateOf(false) }
+    var numBuf by remember { mutableStateOf("") }
+    var numTick by remember { mutableStateOf(0) }
+    val fr = remember { FocusRequester() }
     var rec by remember { mutableStateOf<Job?>(null) }
     var sound by remember { mutableStateOf(0) }
     var eq by remember { mutableStateOf<Equalizer?>(null) }
@@ -1309,6 +1328,37 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, favs: 
         if (i >= 0 && pool.isNotEmpty()) cur = pool[(i + d + pool.size) % pool.size]
     }
     LaunchedEffect(endTick) { if (endTick > 0 && isVod(cur)) step(1) }
+    LaunchedEffect(Unit) { delay(300); runCatching { fr.requestFocus() } }
+    LaunchedEffect(numTick) {
+        if (numBuf.isNotEmpty()) {
+            delay(1500)
+            val nn = numBuf.toIntOrNull()
+            if (nn != null && nn in 1..list.size) cur = list[nn - 1]
+            numBuf = ""
+        }
+    }
+    fun onKey(code: Int): Boolean {
+        if (ctlMode) {
+            if (code == KeyEvent.KEYCODE_MENU) { ctlMode = false; return true }
+            return false
+        }
+        val dpad = code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN || code == KeyEvent.KEYCODE_DPAD_LEFT ||
+            code == KeyEvent.KEYCODE_DPAD_RIGHT || code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
+        if (panel && dpad) return false
+        when (code) {
+            KeyEvent.KEYCODE_DPAD_LEFT -> { exo.seekTo((exo.currentPosition - 10_000L).coerceAtLeast(0L)); toast = "⏪ 10s" }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> { exo.seekTo(exo.currentPosition + 10_000L); toast = "10s ⏩" }
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> step(1)
+            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> step(-1)
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> exo.playWhenReady = !exo.playWhenReady
+            KeyEvent.KEYCODE_MENU -> ctlMode = true
+            KeyEvent.KEYCODE_GUIDE -> panel = !panel
+            KeyEvent.KEYCODE_INFO -> showInfo = !showInfo
+            in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> { numBuf += (code - KeyEvent.KEYCODE_0).toString(); toast = "Channel " + numBuf; numTick++ }
+            else -> return false
+        }
+        return true
+    }
     LaunchedEffect(errTick) {
         if (errTick > 0) {
             tried.add(cur.url)
@@ -1316,9 +1366,9 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, favs: 
             if (alt != null) { toast = "Trying backup stream"; cur = alt } else { tried.clear(); exo.prepare() }
         }
     }
-    BackHandler { if (panel) panel = false else onBack() }
+    BackHandler { if (ctlMode) ctlMode = false else if (panel) panel = false else onBack() }
     Box(
-        Modifier.fillMaxSize().background(Color.Black).pointerInput(Unit) {
+        Modifier.fillMaxSize().background(Color.Black).focusRequester(fr).focusable().onKeyEvent { ev -> ev.type == KeyEventType.KeyDown && onKey(ev.nativeKeyEvent.keyCode) }.pointerInput(Unit) {
             detectVerticalDragGestures(
                 onDragStart = { o -> leftSide = o.x < size.width / 2; acc = 0f },
                 onVerticalDrag = { _, dy ->
@@ -1388,7 +1438,7 @@ fun PlayerScreen(list: List<Channel>, start: Channel, onBack: () -> Unit, favs: 
                 modifier = Modifier.fillMaxSize()
             )
         }
-        if (ui && !locked) {
+        if ((ui || ctlMode) && !locked) {
             Column(Modifier.align(Alignment.TopStart).padding(16.dp)) {
                 Text(cur.name, fontWeight = FontWeight.Bold, color = Color.White, fontSize = 18.sp)
                 if (info.isNotEmpty()) Text(info, color = Color.LightGray, fontSize = 12.sp)
