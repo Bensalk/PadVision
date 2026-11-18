@@ -865,7 +865,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 2.0", color = Color.LightGray)
+        Text("Version 2.1", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -981,15 +981,15 @@ fun App(store: Store, ti: Int, isPhone: Boolean = false, onProfile: (Int) -> Uni
                         val base = remember(channels, vod, az, minQ) { channels.filter { isVod(it) == vod }.let { l -> if (az) l.sortedBy { it.name.lowercase() } else if (minQ > 0) l.sortedByDescending { quality(it) } else l } }
                         val groups = remember(base) { base.map { it.group }.distinct().sorted() }
                         val shown = remember(base, g) { base.filter { g == null || it.group == g } }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
-                            FilterChip(!vod, { vod = false; g = null }, { Text("📺 Live TV") })
-                            FilterChip(vod, { vod = true; g = null }, { Text("🎬 Movies & Series") })
-                            FilterChip(az, { az = !az }, { Text("A–Z") })
-                            FilterChip(minQ > 0, { val n = when (minQ) { 0 -> 720; 720 -> 1080; 1080 -> 2160; else -> 0 }; minQ = n; store.minQ = n }, { Text(when (minQ) { 0 -> "Quality: any"; 2160 -> "4K only"; else -> minQ.toString() + "p+" }) })
-                            FilterChip(false, { localPick.launch(arrayOf("video/*", "audio/*")) }, { Text("📁 Local video") })
-                            FilterChip(false, { checkLinks(shown) }, { Text("🧹 Check links") })
-                            FilterChip(guide, { guide = !guide }, { Text("📋 Guide") })
-                            if (guide) FilterChip(gridMode, { gridMode = !gridMode }, { Text("▦ Grid") })
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
+                            item { FilterChip(!vod, { vod = false; g = null }, { Text("📺 Live TV") }) }
+                            item { FilterChip(vod, { vod = true; g = null }, { Text("🎬 Movies & Series") }) }
+                            item { FilterChip(az, { az = !az }, { Text("A–Z") }) }
+                            item { FilterChip(minQ > 0, { val n = when (minQ) { 0 -> 720; 720 -> 1080; 1080 -> 2160; else -> 0 }; minQ = n; store.minQ = n }, { Text(when (minQ) { 0 -> "Quality: any"; 2160 -> "4K only"; else -> minQ.toString() + "p+" }) }) }
+                            item { FilterChip(false, { localPick.launch(arrayOf("video/*", "audio/*")) }, { Text("📁 Local video") }) }
+                            item { FilterChip(false, { checkLinks(shown) }, { Text("🧹 Check links") }) }
+                            item { FilterChip(guide, { guide = !guide }, { Text("📋 Guide") }) }
+                            if (guide) item { FilterChip(gridMode, { gridMode = !gridMode }, { Text("▦ Grid") }) }
                         }
                         if (status.isNotEmpty()) Text(status, fontSize = 12.sp, color = Color.LightGray)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
