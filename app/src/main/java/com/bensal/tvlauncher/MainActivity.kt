@@ -645,20 +645,23 @@ fun NavItem(icon: String, label: String, sel: Boolean, expanded: Boolean, onClic
         f -> Color.White.copy(alpha = 0.12f)
         else -> Color.Transparent
     }
+    val isPhoneNav = LocalConfiguration.current.smallestScreenWidthDp < 600
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(bg)
-            .onFocusChanged { f = it.isFocused }.clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(bg)
+            .onFocusChanged { f = it.isFocused }.clickable(onClick = onClick)
+            .padding(horizontal = if (isPhoneNav) 8.dp else 14.dp, vertical = if (isPhoneNav) 8.dp else 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(icon, fontSize = 20.sp)
-        if (expanded) { Spacer(Modifier.width(12.dp)); Text(label, maxLines = 1) }
+        Text(icon, fontSize = if (isPhoneNav) 16.sp else 20.sp)
+        if (expanded) { Spacer(Modifier.width(10.dp)); Text(label, maxLines = 1, fontSize = if (isPhoneNav) 14.sp else 16.sp) }
     }
 }
 
 @Composable
-fun Sidebar(tab: Int, expanded: Boolean, onToggle: () -> Unit, onTab: (Int) -> Unit) {
-    val w by animateDpAsState(if (expanded) 200.dp else 72.dp, label = "w")
-    Column(Modifier.width(w).fillMaxHeight().background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f)).padding(8.dp)) {
+fun Sidebar(tab: Int, expanded: Boolean, isPhone: Boolean, onToggle: () -> Unit, onTab: (Int) -> Unit) {
+    val collapsed = if (isPhone) 52.dp else 72.dp
+    val w by animateDpAsState(if (expanded) 200.dp else collapsed, label = "w")
+    Column(Modifier.width(w).fillMaxHeight().background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f)).padding(if (isPhone) 4.dp else 8.dp)) {
         NavItem("☰", "PadVision", false, expanded) { onToggle() }
         Spacer(Modifier.height(8.dp))
         listOf("Live TV" to "📺", "Search" to "⌕", "Settings" to "⚙").forEachIndexed { i, (l, ic) ->
@@ -765,15 +768,15 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
         }
         item { Text("Privacy: clear history any time", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { store.recents = emptyList(); store.clearCounts(); onChange(); msg = "Watch history cleared" }) { Text("Clear watch history") }
-                OutlinedButton(onClick = { store.searches = emptyList(); onChange(); msg = "Search history cleared" }) { Text("Clear search history") }
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { clearPositions(); msg = "Resume positions cleared" }) { Text("Clear resume positions") }
-                OutlinedButton(onClick = { store.recents = emptyList(); store.searches = emptyList(); store.clearCounts(); clearPositions(); onChange(); msg = "All history cleared" }) { Text("Clear everything") }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { store.recents = emptyList(); store.clearCounts(); onChange(); msg = "Watch history cleared" }) { Text("Clear watch history") }
+                    OutlinedButton(onClick = { store.searches = emptyList(); onChange(); msg = "Search history cleared" }) { Text("Clear search history") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { clearPositions(); msg = "Resume positions cleared" }) { Text("Clear resume positions") }
+                    OutlinedButton(onClick = { store.recents = emptyList(); store.searches = emptyList(); store.clearCounts(); clearPositions(); onChange(); msg = "All history cleared" }) { Text("Clear everything") }
+                }
             }
         }
         item { Text("Card size", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
@@ -825,14 +828,14 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
         item { if (msg.isNotEmpty()) Text(msg, color = Color.LightGray) }
         item { Text("Personalize", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { pick.launch(arrayOf("image/*")) }) { Text("Choose wallpaper") }
                 OutlinedButton(onClick = { store.wall = ""; onChange() }) { Text("Remove wallpaper") }
             }
         }
         item {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(city, { city = it }, singleLine = true, label = { Text("Weather city") })
+                OutlinedTextField(city, { city = it }, singleLine = true, label = { Text("Weather city") }, modifier = Modifier.weight(1f))
                 Button(onClick = { store.city = city.trim(); onChange() }) { Text("Save") }
             }
         }
@@ -846,10 +849,12 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
         item { OutlinedButton(onClick = { store.hiddenCh = emptySet(); onChange() }) { Text("Unhide all channels (long-press a channel to hide it)") } }
         item { Text("PIN lock for Settings", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
         item {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(newPin, { newPin = it.filter { c -> c.isDigit() }.take(8) }, singleLine = true, label = { Text("New PIN") })
-                Button(onClick = { if (newPin.length >= 4) { store.pin = newPin; newPin = "" } }) { Text("Save") }
-                OutlinedButton(onClick = { store.pin = "" }) { Text("Clear") }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(newPin, { newPin = it.filter { c -> c.isDigit() }.take(8) }, singleLine = true, label = { Text("New PIN") }, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { if (newPin.length >= 4) { store.pin = newPin; newPin = "" } }) { Text("Save PIN") }
+                    OutlinedButton(onClick = { store.pin = "" }) { Text("Clear PIN") }
+                }
             }
         }
     }
@@ -860,7 +865,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 1.9", color = Color.LightGray)
+        Text("Version 2.0", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -964,7 +969,8 @@ fun App(store: Store, ti: Int, isPhone: Boolean = false, onProfile: (Int) -> Uni
             Box(Modifier.fillMaxSize().background(Color(0xAA000000)))
         }
         Box(Modifier.fillMaxSize().systemBarsPadding()) {
-            Box(Modifier.fillMaxSize().padding(start = 88.dp, top = 16.dp, end = 16.dp, bottom = 16.dp)) {
+            val sidebarOffset = if (isPhone) 60.dp else 88.dp
+            Box(Modifier.fillMaxSize().padding(start = sidebarOffset, top = 16.dp, end = 16.dp, bottom = 16.dp)) {
                 when (tab) {
                     0 -> Column {
                         var g by remember { mutableStateOf<String?>(null) }
@@ -1033,7 +1039,7 @@ fun App(store: Store, ti: Int, isPhone: Boolean = false, onProfile: (Int) -> Uni
                     else -> About()
                 }
             }
-            Sidebar(tab, expanded, { expanded = !expanded }) { tab = it }
+            Sidebar(tab, expanded, isPhone, { expanded = !expanded }) { tab = it }
         }
         if (ambient && playing == null) Box(Modifier.fillMaxSize().background(Color.Black).clickable { ambient = false; lastTouch = System.currentTimeMillis() }, contentAlignment = Alignment.Center) {
             Text(time, fontSize = 72.sp, fontWeight = FontWeight.Light)
