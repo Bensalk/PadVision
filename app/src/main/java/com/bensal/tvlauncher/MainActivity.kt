@@ -747,7 +747,11 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
         item { Text("⭐ Extra sources", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
         listOf(
             "Free-TV Global" to "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
-            "Indian TV" to "https://raw.githubusercontent.com/dark-N00B/IPtv/master/new_indian_tv.m3u"
+            "Indian TV" to "https://raw.githubusercontent.com/dark-N00B/IPtv/master/new_indian_tv.m3u",
+            "Pluto TV (All regions)" to "https://i.mjh.nz/PlutoTV/all.m3u8",
+            "Samsung TV Plus (All regions)" to "https://i.mjh.nz/SamsungTVPlus/all.m3u8",
+            "Plex TV (All regions)" to "https://i.mjh.nz/Plex/all.m3u8",
+            "Stirr TV" to "https://i.mjh.nz/Stirr/all.m3u8"
         ).forEach { (name, url) ->
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -889,7 +893,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 2.4", color = Color.LightGray)
+        Text("Version 2.5", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
