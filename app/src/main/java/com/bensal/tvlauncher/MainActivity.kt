@@ -873,7 +873,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 2.2", color = Color.LightGray)
+        Text("Version 2.3", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -1009,7 +1009,7 @@ fun App(store: Store, ti: Int, isPhone: Boolean = false, onProfile: (Int) -> Uni
                         if (guide) {
                             val tick = epgTick
                             if (tick >= 0 && Epg.data.isEmpty()) Text("No guide data yet. Add an XMLTV guide link in Settings, or use a playlist that includes one.", color = Color.LightGray)
-                            if (gridMode) GuideGrid(shown) { playing = it } else LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (gridMode) GuideGrid(shown) { playing = it } else LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 items(shown.take(300)) { c ->
                                     val (n, x) = nowNext(c)
                                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { playing = c }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1023,7 +1023,7 @@ fun App(store: Store, ti: Int, isPhone: Boolean = false, onProfile: (Int) -> Uni
                                     }
                                 }
                             }
-                        } else LazyVerticalGrid(GridCells.Adaptive(250.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        } else LazyVerticalGrid(GridCells.Adaptive(250.dp), modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                             items(shown) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } }
                         }
                     }
