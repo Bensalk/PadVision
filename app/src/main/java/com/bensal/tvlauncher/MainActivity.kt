@@ -553,12 +553,12 @@ fun Root() {
     }
     val t = themes[ti]
     val accent = if (store.accent >= 0f) Color.hsv(store.accent * 360f, 0.65f, 1f) else Color(t.accent)
+    val isPhone = LocalConfiguration.current.smallestScreenWidthDp < 600
     MaterialTheme(
         colorScheme = darkColorScheme(
             primary = accent, onPrimary = if (accent.luminance() > 0.4f) Color.Black else Color.White,
             background = Color(t.bg), surface = Color(t.surface), surfaceVariant = Color(t.surface)
         )
-    val isPhone = LocalConfiguration.current.smallestScreenWidthDp < 600
     ) { CompositionLocalProvider(LocalContentColor provides Color.White) { key(prof) { App(store, ti, isPhone, { pr -> meta.edit().putInt("prof", pr).apply(); prof = pr }) { ti = it; store.theme = it } } } }
 }
 
