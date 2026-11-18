@@ -735,7 +735,15 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
                 TextButton(onClick = { onRemove(u) }) { Text("Remove") }
             }
         }
-        item { Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(onClick = onAdd) { Text("Add M3U link") }; OutlinedButton(onClick = onRefresh) { Text("Refresh") }; OutlinedButton(onClick = { importPick.launch(arrayOf("*/*")) }) { Text("Import M3U file") } } }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = onAdd) { Text("Add M3U link") }
+                    OutlinedButton(onClick = onRefresh) { Text("Refresh") }
+                }
+                OutlinedButton(onClick = { importPick.launch(arrayOf("*/*")) }) { Text("Import M3U file") }
+            }
+        }
         item { Text("Playlist library", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
         item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -865,7 +873,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 2.1", color = Color.LightGray)
+        Text("Version 2.2", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
