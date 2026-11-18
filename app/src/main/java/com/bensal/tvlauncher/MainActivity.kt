@@ -521,6 +521,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         AppCtx.ctx = applicationContext
         handle(intent)
+        if (resources.configuration.smallestScreenWidthDp >= 600) {
+            requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1)
         runCatching {
             @Suppress("DEPRECATION")
