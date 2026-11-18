@@ -661,11 +661,11 @@ fun Sidebar(tab: Int, expanded: Boolean, onToggle: () -> Unit, onTab: (Int) -> U
     Column(Modifier.width(w).fillMaxHeight().background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f)).padding(8.dp)) {
         NavItem("☰", "PadVision", false, expanded) { onToggle() }
         Spacer(Modifier.height(8.dp))
-        listOf("Home" to "⌂", "Live TV" to "📺", "Apps" to "▦", "Search" to "⌕", "Settings" to "⚙").forEachIndexed { i, (l, ic) ->
+        listOf("Live TV" to "📺", "Search" to "⌕", "Settings" to "⚙").forEachIndexed { i, (l, ic) ->
             NavItem(ic, l, tab == i, expanded) { onTab(i) }
         }
         Spacer(Modifier.weight(1f))
-        NavItem("ⓘ", "About", tab == 5, expanded) { onTab(5) }
+        NavItem("ⓘ", "About", tab == 3, expanded) { onTab(3) }
     }
 }
 
@@ -860,7 +860,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 1.8", color = Color.LightGray)
+        Text("Version 1.9", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
@@ -882,13 +882,12 @@ fun App(store: Store, ti: Int, isPhone: Boolean = false, onProfile: (Int) -> Uni
     var lists by remember { mutableStateOf(store.lists) }
     var epgUrl by remember { mutableStateOf(store.epgUrl) }
     val channels = remember(channelsRaw, hiddenCh, kids, minQ, renames) { channelsRaw.filter { it.url !in hiddenCh && (!kids || kidsWords.containsMatchIn(it.group)) && (minQ == 0 || quality(it) >= minQ) }.map { c -> renames[c.url]?.let { c.copy(name = it) } ?: c } }
-    var apps by remember { mutableStateOf(listOf<AppItem>()) }
     var favs by remember { mutableStateOf(store.favs) }
     var pls by remember { mutableStateOf(store.playlists) }
     var recents by remember { mutableStateOf(store.recents) }
     var recent by remember { mutableStateOf(store.searches) }
     var playing by remember { mutableStateOf<Channel?>(null) }
-    var tab by remember { mutableStateOf(if (isPhone) 1 else 0) }
+    var tab by remember { mutableStateOf(0) }
     var expanded by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
@@ -903,11 +902,6 @@ fun App(store: Store, ti: Int, isPhone: Boolean = false, onProfile: (Int) -> Uni
         favs = if (c.url in favs) favs - c.url else favs + c.url
         store.favs = favs
     }
-    var hidden by remember { mutableStateOf(store.hidden) }
-    var folders by remember { mutableStateOf(store.folders) }
-    var menuApp by remember { mutableStateOf<AppItem?>(null) }
-    var folderText by remember { mutableStateOf("") }
-    var folderSel by remember { mutableStateOf<String?>(null) }
     var multi by remember { mutableStateOf<Channel?>(null) }
     var menuCh by remember { mutableStateOf<Channel?>(null) }
     var chText by remember { mutableStateOf("") }
@@ -916,9 +910,7 @@ fun App(store: Store, ti: Int, isPhone: Boolean = false, onProfile: (Int) -> Uni
     var wall by remember { mutableStateOf(store.wall) }
     var city by remember { mutableStateOf(store.city) }
     var weather by remember { mutableStateOf("") }
-    val visibleApps = remember(apps, hidden) { apps.filter { it.pkg !in hidden } }
-    fun hide(pkg: String) { hidden = hidden + pkg; store.hidden = hidden }
-    val onChange: () -> Unit = { hidden = store.hidden; wall = store.wall; city = store.city; hiddenCh = store.hiddenCh; kids = store.kids; renames = store.renames; lists = store.lists; minQ = store.minQ; recents = store.recents; recent = store.searches; epgUrl = store.epgUrl; favs = store.favs; if (store.playlists != pls) { pls = store.playlists; reload() } }
+    val onChange: () -> Unit = { wall = store.wall; city = store.city; hiddenCh = store.hiddenCh; kids = store.kids; renames = store.renames; lists = store.lists; minQ = store.minQ; recents = store.recents; recent = store.searches; epgUrl = store.epgUrl; favs = store.favs; if (store.playlists != pls) { pls = store.playlists; reload() } }
     var status by remember { mutableStateOf("") }
     fun checkLinks(list: List<Channel>) {
         scope.launch {
@@ -948,14 +940,13 @@ fun App(store: Store, ti: Int, isPhone: Boolean = false, onProfile: (Int) -> Uni
     }
     LaunchedEffect(city) { weather = if (city.isBlank()) "" else fetchWeather(city) }
     LaunchedEffect(Unit) {
-        apps = withContext(Dispatchers.Default) { loadApps(ctx) }
         loading = true; channelsRaw = pls.flatMap { fetch(it) }.distinctBy { it.url }; loading = false
         if (store.auto) store.recents.firstOrNull()?.let { u -> channelsRaw.firstOrNull { it.url == u }?.let { playing = it } }
     }
     val cs = MaterialTheme.colorScheme
     var q by remember { mutableStateOf("") }
     val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { q = it; tab = 3 }
+        r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { q = it; tab = 1 }
     }
     val localPick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -975,43 +966,7 @@ fun App(store: Store, ti: Int, isPhone: Boolean = false, onProfile: (Int) -> Uni
         Box(Modifier.fillMaxSize().systemBarsPadding()) {
             Box(Modifier.fillMaxSize().padding(start = 88.dp, top = 16.dp, end = 16.dp, bottom = 16.dp)) {
                 when (tab) {
-                    0 -> {
-                        val byUrl = remember(channels) { channels.associateBy { it.url } }
-                        val recentCh = remember(recents, byUrl) { recents.mapNotNull { byUrl[it] } }
-                        val hero = recentCh.firstOrNull() ?: channels.firstOrNull()
-                        val byGroup = remember(channels) { channels.groupBy { it.group }.toSortedMap() }
-                        val fl = remember(channels, favs) { channels.filter { it.url in favs } }
-                        val kidsList = remember(channels) { channels.filter { kidsWords.containsMatchIn(it.group) }.take(30) }
-                        val topList = remember(channels, recents) { store.top(channels) }
-                        val recs = remember(playing) { (ctx.getExternalFilesDir(Environment.DIRECTORY_MOVIES)?.listFiles()?.toList() ?: emptyList()).sortedByDescending { it.lastModified() }.take(20).map { f -> Channel(f.name, Uri.fromFile(f).toString(), "Recording", null) } }
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                            item { Row(verticalAlignment = Alignment.CenterVertically) { Text(time, fontSize = 36.sp, fontWeight = FontWeight.Light); if (weather.isNotEmpty()) { Spacer(Modifier.width(24.dp)); Text("🌤 $weather", fontSize = 22.sp) }; Spacer(Modifier.width(24.dp)); TextButton(onClick = { panel = true }) { Text("⚡ Quick panel") } } }
-                            item { Hero(hero, hero != null && hero.url in favs, { hero?.let { playing = it } }, { hero?.let { toggleFav(it) } }) }
-                            if (recentCh.isNotEmpty()) item {
-                                Shelf("Continue Watching") { items(recentCh) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } }
-                            }
-                            if (fl.isNotEmpty()) item {
-                                Shelf("Favorites") { items(fl) { c -> TvCard(c, true, { toggleFav(c) }) { playing = c } } }
-                            }
-                            if (recs.isNotEmpty()) item { Shelf("Recordings") { items(recs) { c -> TvCard(c, false, {}) { playing = c } } } }
-                            if (topList.isNotEmpty()) item { Shelf("Most Watched") { items(topList) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
-                            if (kidsList.isNotEmpty() && !kids) item { Shelf("Kids & Family") { items(kidsList) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
-                            lists.map { it.first }.distinct().forEach { ln ->
-                                val ul = lists.filter { it.first == ln }.map { it.second }.toSet()
-                                item { Shelf("⭐ " + ln) { items(channels.filter { it.url in ul }) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
-                            }
-                            val games = visibleApps.filter { it.isGame }
-                            if (games.isNotEmpty()) item { Shelf("Games") { items(games) { AppTile(it) { menuApp = it } } } }
-                            item { Shelf("Apps") { items(visibleApps) { AppTile(it) { menuApp = it } } } }
-                            folders.values.distinct().sorted().forEach { fn ->
-                                item { Shelf("📁 " + fn) { items(visibleApps.filter { folders[it.pkg] == fn }) { AppTile(it) { menuApp = it } } } }
-                            }
-                            byGroup.entries.take(15).forEach { (g, glist) ->
-                                item { Shelf(g) { items(glist.take(30)) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } } } }
-                            }
-                        }
-                    }
-                    1 -> Column {
+                    0 -> Column {
                         var g by remember { mutableStateOf<String?>(null) }
                         var vod by remember { mutableStateOf(false) }
                         var az by remember { mutableStateOf(false) }
@@ -1058,34 +1013,22 @@ fun App(store: Store, ti: Int, isPhone: Boolean = false, onProfile: (Int) -> Uni
                             items(shown) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { playing = c } }
                         }
                     }
-                    2 -> Column {
-                        val fnames = remember(folders) { folders.values.distinct().sorted() }
-                        if (fnames.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
-                            item { FilterChip(folderSel == null, { folderSel = null }, { Text("All") }) }
-                            items(fnames) { n -> FilterChip(folderSel == n, { folderSel = n }, { Text("📁 " + n) }) }
-                        }
-                        LazyVerticalGrid(GridCells.Adaptive(110.dp)) {
-                            items(visibleApps.filter { folderSel == null || folders[it.pkg] == folderSel }) { AppTile(it) { menuApp = it } }
-                        }
-                    }
-                    3 -> Column {
+                    1 -> Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(q, { q = it }, singleLine = true, label = { Text("Search channels and apps") }, modifier = Modifier.weight(1f))
+                            OutlinedTextField(q, { q = it }, singleLine = true, label = { Text("Search channels") }, modifier = Modifier.weight(1f))
                             TextButton(onClick = { runCatching { voice.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)) } }) { Text("🎤") }
                         }
                         if (q.isBlank() && recent.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
                             items(recent) { r -> FilterChip(false, { q = r }, { Text(r) }) }
                         }
                         if (q.isNotBlank()) {
-                            val ar = visibleApps.filter { it.label.contains(q, true) }
-                            if (ar.isNotEmpty()) Shelf("Apps") { items(ar) { AppTile(it) { menuApp = it } } }
                             val cr = remember(q, channels) { channels.filter { it.name.contains(q, true) }.take(80) }
                             LazyVerticalGrid(GridCells.Adaptive(250.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                                 items(cr) { c -> TvCard(c, c.url in favs, { toggleFav(c) }) { if (q.isNotBlank()) { recent = (listOf(q.trim()) + recent).distinct().take(8); store.searches = recent }; playing = c } }
                             }
                         }
                     }
-                    4 -> Settings(store, ti, onTheme, onProfile, pls, { showAdd = true },
+                    2 -> Settings(store, ti, onTheme, onProfile, pls, { showAdd = true },
                         { u -> pls = pls - u; store.playlists = pls; reload() }, { reload() }, onChange, { u -> pls = pls + u; store.playlists = pls; reload() }, { c -> playing = c })
                     else -> About()
                 }
@@ -1122,26 +1065,6 @@ fun App(store: Store, ti: Int, isPhone: Boolean = false, onProfile: (Int) -> Uni
             },
             confirmButton = { TextButton(onClick = { hiddenCh = hiddenCh + c.url; store.hiddenCh = hiddenCh; menuCh = null }) { Text("Hide channel") } },
             dismissButton = { TextButton(onClick = { menuCh = null }) { Text("Cancel") } }
-        )
-    }
-    menuApp?.let { a ->
-        AlertDialog(
-            onDismissRequest = { menuApp = null },
-            title = { Text(a.label) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(folderText, { folderText = it }, singleLine = true, label = { Text("Folder name") })
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = {
-                            if (folderText.isNotBlank()) { folders = folders + (a.pkg to folderText.trim()); store.folders = folders }
-                            menuApp = null; folderText = ""
-                        }) { Text("Add to folder") }
-                        if (a.pkg in folders) OutlinedButton(onClick = { folders = folders - a.pkg; store.folders = folders; menuApp = null }) { Text("Remove") }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { hide(a.pkg); menuApp = null }) { Text("Hide app") } },
-            dismissButton = { TextButton(onClick = { menuApp = null }) { Text("Cancel") } }
         )
     }
     if (panel) {
