@@ -744,6 +744,22 @@ fun Settings(store: Store, ti: Int, onTheme: (Int) -> Unit, onProfile: (Int) -> 
                 OutlinedButton(onClick = { importPick.launch(arrayOf("*/*")) }) { Text("Import M3U file") }
             }
         }
+        item { Text("⭐ Extra sources", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
+        listOf(
+            "Free-TV Global" to "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
+            "Indian TV" to "https://raw.githubusercontent.com/dark-N00B/IPtv/master/new_indian_tv.m3u"
+        ).forEach { (name, url) ->
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(name, fontWeight = FontWeight.Medium)
+                        Text(url, fontSize = 11.sp, color = Color.LightGray, maxLines = 1)
+                    }
+                    if (url in pls) Text("✓ Added", color = Color.LightGray, modifier = Modifier.padding(start = 8.dp))
+                    else Button(onClick = { onAddUrl(url) }, modifier = Modifier.padding(start = 8.dp)) { Text("Add") }
+                }
+            }
+        }
         item { Text("Playlist library", fontWeight = FontWeight.Bold, fontSize = 20.sp) }
         item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -873,7 +889,7 @@ fun About() {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("PadVision", fontSize = 40.sp, fontWeight = FontWeight.Bold)
         Text("TV-style launcher and live TV player for tablets")
-        Text("Version 2.3", color = Color.LightGray)
+        Text("Version 2.4", color = Color.LightGray)
         Spacer(Modifier.height(12.dp))
         Text("Created by Bensal", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("Device: ${Build.MANUFACTURER} ${Build.MODEL}", color = Color.LightGray)
