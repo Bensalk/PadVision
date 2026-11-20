@@ -33,6 +33,3 @@ CI builds a signed APK automatically on every push. Download the latest APK from
 - Media3 / ExoPlayer
 - Android 8.0+
 
-## Created by
-
-Bensal
