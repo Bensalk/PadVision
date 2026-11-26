@@ -30,7 +30,7 @@ jobs:
         run: |
           VER=$(grep -o 'Version [0-9.]*' app/src/main/java/com/bensal/tvlauncher/MainActivity.kt | head -1 | sed 's/Version //')
           TAG="v${VER}-build${{ github.run_number }}"
-          gh release create "$TAG" "app/build/outputs/apk/debug/app-debug.apk#PadVision.apk" \
+          gh release create "$TAG" "app/build/outputs/apk/debug/app-debug.apk#padvision-${VER}-android.apk" \
             --title "PadVision ${VER} (build ${{ github.run_number }})" \
             --notes "Automatic build from commit ${{ github.sha }}" \
             --target "${{ github.sha }}"
